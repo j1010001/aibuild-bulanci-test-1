@@ -1,0 +1,33 @@
+# Node
+node_modules/
+npm-debug.log
+yarn-error.log
+
+# Build output
+dist/
+.vite/
+
+# Playwright / e2e
+tests/e2e/output/
+tests/e2e/output-blank/
+playwright-report/
+test-results/
+.playwright/
+
+# Agent runtime artifacts (checked-in templates are NOT ignored)
+.agent/PROMPT.md
+.agent/REVIEW.md
+.agent/NOTES.md
+.agent/last-verify.log
+.agent/DISPUTE.md
+.agent/DISPUTE-VERDICT.md
+.agent/DISPUTES/
+.agent/review-inputs/
+.agent/review-settings.json
+.agent/run.lock
+
+# Worktrees created by run-issue.sh
+.worktrees/
+
+# OS
+.DS_Store

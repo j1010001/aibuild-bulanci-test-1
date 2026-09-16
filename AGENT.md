@@ -1,0 +1,98 @@
+# AGENT.md — operating manual for this repo
+
+Maintained by the agent build loop. See
+`spec/2026-09-15-agent-build-system-design.md` for the system's design rationale
+and `BUILD-SYSTEM-README.md` for operator instructions.
+
+## Install
+
+```
+npm install
+npx playwright install chromium
+```
+
+Requires Node ≥ 20.
+
+## Run the game (dev)
+
+```
+npm run dev
+```
+
+Opens on `http://localhost:5173`. Practice mode is the default landing.
+
+## Verify (the finish line)
+
+```
+./scripts/verify.sh
+```
+
+Three layers, fastest first, stop at first failure:
+
+1. **Static** — `tsc --noEmit`, `eslint`, fencing static check (`scripts/fencing-check.sh`).
+2. **Unit** — `vitest run`.
+3. **E2E smoke** — Playwright; boots the dev server itself.
+
+The e2e output (screenshots, traces) is under `tests/e2e/output/`.
+
+The fencing **runtime** canary check (spawns claude and is expensive) is gated:
+
+```
+VERIFY_FENCING_RUNTIME=1 ./scripts/verify.sh
+```
+
+Run it during the initial self-test and after any change to the reviewer
+invocation, `.agent/REVIEW.template.md`, or the fencing verifier.
+
+### Run each layer individually
+
+```
+npx tsc --noEmit
+npx eslint . --max-warnings=0
+bash scripts/fencing-check.sh
+npx vitest run
+npx playwright test
+```
+
+## Repo rules
+
+- **`src/sim/`** is pure TypeScript. No DOM imports, no three.js imports, no
+  network imports. Deterministic function of its inputs. Testable in Node
+  (vitest) with no browser.
+- **State changes only via `step()`.** Do not mutate `State` in place from
+  render or input layers.
+- **`window.__game`** is the e2e test hook (spec §9). Dev-only; gated by
+  `import.meta.env.DEV`. When you add state to the sim, extend the hook's
+  `getState()` shape so Playwright can assert on it.
+- **Commits** reference the issue number: `issue #N: <what changed>`.
+
+## Fencing canary
+
+`src/__fencing-canary.ts` is load-bearing test infrastructure, not dead code.
+It contains a distinctive token (`FENCING_CANARY_9F3A2C`) that the dispute
+reviewer must never see. The fencing static check (`scripts/fencing-check.sh`)
+verifies the file's presence and token; the runtime canary
+(`scripts/fencing-canary.sh`) proves the reviewer cannot read it via the
+Claude Code permission mechanism. Removing this file, refactoring it away, or
+removing either check is a spec violation (see
+`spec/2026-09-15-agent-build-system-design.md` §8.9 and §13). If you truly
+need to replace the mechanism, write `.agent/CANARY-REPLACEMENT.md` first with
+an equivalent guarantee.
+
+## Layout
+
+```
+src/                 game code (walking skeleton + gameplay-per-issue)
+src/sim/             pure simulation core (no DOM)
+src/__fencing-canary.ts  load-bearing test infra (do not delete)
+tests/unit/          vitest tests for src/sim/
+tests/e2e/           Playwright smoke suite
+scripts/             verify.sh, run-issue.sh, build-prompt.sh, review-dispute.sh, setup-labels.sh, fencing-check.sh, fencing-canary.sh
+.agent/              PROMPT.template.md, REVIEW.template.md (checked in); runtime artifacts gitignored
+spec/                design specs (game + build-system)
+```
+
+## Common pitfalls the loop has learned
+
+_This section grows over time. Each entry names a specific failure once
+observed, not general advice. Add to the bottom; do not delete history._
