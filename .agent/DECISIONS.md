@@ -126,3 +126,64 @@ commits I make end with:
 If the user prefers not to attribute (or wants a different form), remove or
 change the line — memory rule or explicit request will override for future
 sessions.
+
+## D12. Protected-paths mechanical guard added (2026-09-18)
+
+Operator raised: does the system guarantee the agent cannot edit
+`scripts/verify.sh` to always exit 0? Prior answer: no — only human PR review.
+That is thin.
+
+Fix: added a `protected-paths` check in `verify.sh` layer 1 that diffs the
+working tree against `origin/main` on a fixed list of paths (scripts, prompt
+templates, GitHub config, specs, fencing canary, root config files) and fails
+verify if any change appears. Matching soft rule 13 added to
+`PROMPT.template.md`. Corresponding spec updates (§5.3, §7, criterion 14)
+were drafted and moved to `.agent/for-review/spec-changes-2026-09-18.patch`
+for the operator's separate review — the operator explicitly said spec edits
+were their call, and they were not authorized to land in this commit.
+
+Root config files (`tsconfig.json`, `vite.config.ts`, `vitest.config.ts`,
+`playwright.config.ts`, `.eslintrc.cjs`) are protected too — a stuck agent
+would otherwise loosen strict TypeScript or disable a lint rule to bury a
+failure. If a gameplay issue legitimately needs a config change, operator does
+it manually. Starting strict; relax only if actual friction shows up.
+
+Sub-decision: the guard skips when the current branch is `main`. Rationale:
+the guard exists for `issue-N` branches; on main, the operator legitimately
+edits protected paths (this commit is an example). Not perfect — an operator
+could accidentally break something on main and only notice later. Not
+protecting against operator error is the correct tradeoff; the loop is what we
+are defending against.
+
+## D13. Issue template simplified (2026-09-18)
+
+Operator raised: original template leaked implementation detail (Playwright
+named in criteria, verify.sh restated as a checkbox, Scope required a file
+list). Correct — template should ask for what and why; the loop handles how.
+
+Rewrote to require only Summary + Acceptance criteria; Verification and Scope
+are optional with "leave blank" guidance. Criteria must describe observable
+behavior, not test tools or file paths. Corresponding spec update (§5.2
+revised) is in `.agent/for-review/spec-changes-2026-09-18.patch` — unauthorized
+to land in this commit, see D12.
+
+## D14. Interrupted-run label recovery (fixed in the 2026-09-18 commit)
+
+When `run-issue.sh` is interrupted (Ctrl-C or crash), the `trap` removes the
+lock file but does NOT restore the issue label from `agent:in-progress` back
+to `agent-ready`. Next run refuses (preflight §8.1 requires `agent-ready`).
+
+Discovered 2026-09-18 during the first attempted self-test of issue #1.
+Manual fix each time is a two-liner (`gh issue edit N --remove-label
+agent:in-progress --add-label agent-ready`), but this is a papercut worth
+fixing.
+
+Fix applied in the same 2026-09-18 commit as D12/D13: `run-issue.sh` now
+tracks a `CLEAN_EXIT` flag (unset by default; set to 1 by every terminal
+path — success, exhaustion, dispute-AMBIGUOUS, bounded-arbitration escalation,
+and inside `release_to_needs_human`). A separate `LABEL_CLAIMED` flag records
+whether the `agent-ready → agent:in-progress` transition happened. The `EXIT`
+trap relabels back to `agent-ready` and posts an "interrupted" comment only
+when `CLEAN_EXIT` is unset AND `LABEL_CLAIMED` is set — so lock-collision
+preflight failures (never claimed the label) skip recovery, and terminal
+paths that already handled labels are not stomped.

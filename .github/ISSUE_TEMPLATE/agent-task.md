@@ -12,24 +12,31 @@ Rules for this template (read before filing):
     about whether it passed, rewrite it. Vague adjectives ("properly", "gracefully",
     "responsive", "fast") are forbidden — replace with exact values or observable
     states.
+  * Describe OBSERVABLE BEHAVIOR, not implementation. Do not name test tools
+    (Playwright, Vitest) or file paths in criteria — the agent picks those.
   * Every criterion must be checkable by a machine OR by a human in under a minute.
   * If you cannot state a finish line, this issue is NOT ready to be labeled
     `agent-ready`. Do not queue it.
-  * Scope tells the agent what NOT to touch. Fill it in.
+  * `scripts/verify.sh` is the standard finish line and runs automatically — you
+    do not need to mention it. Fill Verification only if there is an extra check
+    beyond what verify.sh already covers.
+  * Scope is optional. Leave blank if the whole codebase is fair game.
 -->
 
 ## Summary
 One paragraph. What changes and why.
 
 ## Acceptance criteria
-- Given <precondition>, When <action>, Then <observable, checkable result>
+- Given <precondition>, When <observation>, Then <observable, checkable result>
 - Given ..., When ..., Then ...
 
-## Verification
-- [ ] `./scripts/verify.sh` exits 0
-- [ ] <issue-specific check, e.g. "new unit test tests/unit/bullet.test.ts covers bullet-through-arch-hole">
+## Verification (optional)
+<Extra checks beyond `./scripts/verify.sh` (which runs automatically).
+Leave blank if none.
+Example: "manual: play a round with two browser tabs and confirm no desync.">
 
-## Scope
-Relevant spec sections: e.g. `spec/2026-09-15-browser-party-shooter-design.md` §9 (Shooting).
-Touch: `src/sim/...`.
-Do NOT touch: `src/render.ts`, networking.
+## Scope (optional)
+<What part of the product this concerns, and anything the agent should not
+touch. Leave blank if the whole codebase is fair game. Do not list files —
+name product areas.
+Example: "movement and collision; the networking layer is off limits.">

@@ -21,8 +21,10 @@ to you unchanged each iteration until `./scripts/verify.sh` exits 0.
    `./scripts/verify.sh` on this branch. You do not merge; a human does.
 
 2. **Read first.** Before editing anything: read `AGENT.md`, the spec sections
-   referenced in the issue's Scope, and `.agent/NOTES.md` (if it exists). If you
-   skip this you will duplicate work another turn already did.
+   referenced in the issue's Scope, and `.agent/NOTES.md` (if it exists). If
+   `.agent/last-verify.log` exists, read it — it is the previous turn's verify
+   output and tells you what the loop currently considers broken. If you skip
+   this you will duplicate work another turn already did.
 
 3. **Search before building.** Never assume functionality is missing. Grep the
    codebase for the symbol/behavior first. False "not implemented" conclusions
@@ -83,6 +85,26 @@ to you unchanged each iteration until `./scripts/verify.sh` exits 0.
     test failure that reflects a bug in your implementation. A separate review
     agent will adjudicate; you will see its verdict at the top of NOTES.md next
     turn.
+
+13. **Protected paths.** You may not modify any of:
+
+    - `scripts/**` — the loop and verify.sh itself
+    - `.agent/PROMPT.template.md`, `.agent/REVIEW.template.md` — standing prompts
+    - `.github/**` — issue template and any workflows
+    - `spec/**` — design specs (human-owned)
+    - `src/__fencing-canary.ts` — load-bearing per spec §13
+    - `tsconfig.json`, `vite.config.ts`, `vitest.config.ts`,
+      `playwright.config.ts`, `.eslintrc.cjs` — root config files
+
+    The loop enforces this in bash: `verify.sh` fails at layer 1 if any of
+    these change vs `origin/main`. Do not attempt to work around it (e.g., by
+    loosening a lint rule to bury a failure, disabling strict TypeScript, or
+    editing verify.sh to always exit 0 — the mechanical guard exists because
+    these are exactly the tricks a stuck agent reaches for).
+
+    If an acceptance criterion seems to genuinely require touching a protected
+    path, stop editing, write a note in `.agent/NOTES.md` explaining what and
+    why, and end the turn. A human decides.
 
 ---
 

@@ -66,6 +66,24 @@ npx playwright test
   `getState()` shape so Playwright can assert on it.
 - **Commits** reference the issue number: `issue #N: <what changed>`.
 
+## Protected paths (mechanical guard)
+
+The loop, its prompts, GitHub configuration, specs, the fencing canary, and
+root config files are owned by humans and the loop — not by issue
+implementations. `verify.sh` layer 1 diffs the working tree against
+`origin/main` and fails if any of these change:
+
+- `scripts/**`
+- `.agent/PROMPT.template.md`, `.agent/REVIEW.template.md`
+- `.github/**`
+- `spec/**`
+- `src/__fencing-canary.ts`
+- `tsconfig.json`, `vite.config.ts`, `vitest.config.ts`, `playwright.config.ts`, `.eslintrc.cjs`
+
+If an issue truly needs a change here, end the turn with a note in
+`.agent/NOTES.md` and let the operator make the change manually. There is no
+in-loop escape hatch. See spec §5.3.
+
 ## Fencing canary
 
 `src/__fencing-canary.ts` is load-bearing test infrastructure, not dead code.

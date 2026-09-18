@@ -38,7 +38,64 @@ if [[ -f .agent/DISPUTE.md ]]; then
 fi
 
 # ── layer 1: static ─────────────────────────────────────────────────────────
-banner "layer 1: static (typecheck + lint + fencing)"
+banner "layer 1: static (protected paths + typecheck + lint + fencing)"
+
+# ── protected paths ──
+# The loop, its prompts, GitHub configuration, specs, the fencing canary, and
+# the root config files are owned by humans and the loop — not by issue
+# implementations. verify.sh fails if the agent edits any of them.
+#
+# Runs first so a tampered protected file is diagnosed as such, not as
+# downstream noise (e.g. a corrupted tsconfig.json failing typecheck).
+#
+# Rationale: without this, the agent can edit scripts/verify.sh to always
+# `exit 0`, disable strict TypeScript to bury type errors, or rewrite
+# PROMPT.template.md to remove rules. The prompt says "do not touch these" but
+# prompt rules are advisory; the mechanical guard is what actually enforces it.
+# Matches the spec's core principle: bash decides, not the agent.
+echo "-> protected paths"
+PROTECTED_PATHS=(
+  scripts
+  .agent/PROMPT.template.md
+  .agent/REVIEW.template.md
+  .github
+  spec
+  src/__fencing-canary.ts
+  tsconfig.json
+  vite.config.ts
+  vitest.config.ts
+  playwright.config.ts
+  .eslintrc.cjs
+)
+CURRENT_BRANCH="$(git rev-parse --abbrev-ref HEAD 2>/dev/null || echo "")"
+if [[ "$CURRENT_BRANCH" == "main" ]]; then
+  echo "   (on main; skipping — the guard is for issue-N branches)"
+else
+  BASE_REF=""
+  if git rev-parse --verify --quiet origin/main >/dev/null 2>&1; then
+    BASE_REF="origin/main"
+  elif git rev-parse --verify --quiet main >/dev/null 2>&1; then
+    BASE_REF="main"
+  fi
+  if [[ -z "$BASE_REF" ]]; then
+    echo "   (no origin/main or main ref; skipping — fresh repo before first push)"
+  else
+    MERGE_BASE="$(git merge-base HEAD "$BASE_REF" 2>/dev/null || echo "$BASE_REF")"
+    # Diff working tree (not just committed changes) so uncommitted edits are
+    # also caught.
+    PROTECTED_HITS="$(git diff --name-only "$MERGE_BASE" -- "${PROTECTED_PATHS[@]}" 2>/dev/null || true)"
+    if [[ -n "$PROTECTED_HITS" ]]; then
+      echo "protected paths modified vs $BASE_REF:"
+      printf '   %s\n' $PROTECTED_HITS
+      echo ""
+      echo "These paths are owned by humans and the loop, not by issue implementations."
+      echo "Revert the change. If an issue truly needs to modify a protected path,"
+      echo "end the turn with a note in .agent/NOTES.md explaining why."
+      fail "static/protected-paths"
+    fi
+    echo "   (no protected paths modified vs $BASE_REF)"
+  fi
+fi
 
 echo "-> tsc --noEmit"
 npx tsc --noEmit || fail "static/typecheck"

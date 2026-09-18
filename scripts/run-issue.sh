@@ -53,16 +53,41 @@ fi
 # ── Lock (§8.6) ─────────────────────────────────────────────────────────────
 if ! mkdir "$LOCK_DIR" 2>/dev/null; then
   echo "another run is active (lock: $LOCK_DIR); remove after confirming no claude is running" >&2
+  # Preflight lock-collision failure: we never claimed the label, so no
+  # recovery needed. Skip the trap's recovery path.
+  CLEAN_EXIT=1
   exit 2
 fi
-release_lock() { rmdir "$LOCK_DIR" 2>/dev/null || true; }
-trap release_lock EXIT
+
+# CLEAN_EXIT is set to 1 by the success (§8.5) and exhaustion (§8.7) paths
+# before they exit. If the trap fires with CLEAN_EXIT unset, the run was
+# interrupted (Ctrl-C, crash, kill) between the label claim and one of the
+# terminal paths; the trap then relabels agent:in-progress back to
+# agent-ready so the issue is not stuck. See DECISIONS.md D14.
+CLEAN_EXIT=0
+LABEL_CLAIMED=0
+
+on_exit() {
+  rmdir "$LOCK_DIR" 2>/dev/null || true
+  if [[ "$CLEAN_EXIT" != "1" && "$LABEL_CLAIMED" == "1" ]]; then
+    gh issue edit "$ISSUE" \
+      --remove-label agent:in-progress \
+      --add-label agent-ready >/dev/null 2>&1 || true
+    gh issue comment "$ISSUE" \
+      --body "run-issue.sh was interrupted before reaching a terminal path; label restored to \`agent-ready\`. Re-run when ready." \
+      >/dev/null 2>&1 || true
+  fi
+}
+trap on_exit EXIT
 
 # ── Claim (§8.2) ────────────────────────────────────────────────────────────
 log "claim: add agent:in-progress, remove agent-ready"
 gh issue edit "$ISSUE" --add-label agent:in-progress --remove-label agent-ready >/dev/null
+LABEL_CLAIMED=1
 
 # On failure paths, relabel back to needs-human (or leave in-progress with a note).
+# Marks CLEAN_EXIT=1 so the interrupted-run trap does not stomp the label back
+# to agent-ready.
 release_to_needs_human() {
   local reason_file="$1"
   gh issue edit "$ISSUE" --add-label agent:needs-human --remove-label agent:in-progress >/dev/null || true
@@ -72,6 +97,7 @@ release_to_needs_human() {
   else
     gh issue comment "$ISSUE" --body "Agent loop escalated to agent:needs-human. See worktree ${WORKTREE:-<n/a>}." >/dev/null || true
   fi
+  CLEAN_EXIT=1
 }
 
 # ── Isolate (§8.3) ──────────────────────────────────────────────────────────
@@ -134,6 +160,7 @@ for ((i = 1; i <= MAX_ITERATIONS; i++)); do
         cat .agent/DISPUTE.md
       } | gh issue comment "$ISSUE" --body-file - >/dev/null || true
       gh issue edit "$ISSUE" --add-label agent:needs-human --remove-label agent:in-progress >/dev/null || true
+      CLEAN_EXIT=1
       exit 1
     fi
 
@@ -190,6 +217,7 @@ for ((i = 1; i <= MAX_ITERATIONS; i++)); do
           cat "$archive/VERDICT.md"
         } | gh issue comment "$ISSUE" --body-file - >/dev/null || true
         gh issue edit "$ISSUE" --add-label agent:needs-human --remove-label agent:in-progress >/dev/null || true
+        CLEAN_EXIT=1
         exit 1
         ;;
       *)
@@ -262,10 +290,28 @@ for ((i = 1; i <= MAX_ITERATIONS; i++)); do
 
     gh issue edit "$ISSUE" --add-label agent:in-review --remove-label agent:in-progress >/dev/null
     log "PR opened; issue labeled agent:in-review"
+    CLEAN_EXIT=1
     exit 0
   fi
 
-  log "verify: FAILED (rc=$verify_rc) — next iteration"
+  # Belt-and-suspenders continuity across turns: prepend a compact record of
+  # what verify considered broken to NOTES.md. Rule 2 requires the next turn's
+  # agent to read NOTES.md AND last-verify.log; this backstop makes the
+  # failure visible even if the agent skims one and misses the other.
+  failed_layer="$(grep -E 'FAILED at layer:' .agent/last-verify.log 2>/dev/null | tail -1 | sed -E 's/^.*FAILED at layer:[[:space:]]*//' || echo "unknown")"
+  {
+    echo "## Turn $i verify failed"
+    echo "Layer: ${failed_layer:-unknown}"
+    echo
+    echo '```'
+    tail -n 40 .agent/last-verify.log 2>/dev/null || echo "(no verify log)"
+    echo '```'
+    echo
+    if [[ -f .agent/NOTES.md ]]; then cat .agent/NOTES.md; fi
+  } > .agent/NOTES.md.new
+  mv .agent/NOTES.md.new .agent/NOTES.md
+
+  log "verify: FAILED (rc=$verify_rc, layer=${failed_layer:-unknown}) — next iteration"
 done
 
 # ── Exhaustion (§8.7) ───────────────────────────────────────────────────────
@@ -279,4 +325,5 @@ log "budget exhausted after $MAX_ITERATIONS iterations"
   echo '```'
 } | gh issue comment "$ISSUE" --body-file - >/dev/null || true
 gh issue edit "$ISSUE" --add-label agent:needs-human --remove-label agent:in-progress >/dev/null || true
+CLEAN_EXIT=1
 exit 1
