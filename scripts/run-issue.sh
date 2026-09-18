@@ -18,7 +18,10 @@ cd "$ROOT"
 # ── Config ──────────────────────────────────────────────────────────────────
 ISSUE="${1:-}"
 MAX_ITERATIONS="${MAX_ITERATIONS:-15}"
-LOCK_DIR=".agent/run.lock"
+# Absolute path — the script cd's into the worktree before the trap fires;
+# a relative LOCK_DIR would make the trap look in the wrong directory and
+# leak the lock across runs.
+LOCK_DIR="$ROOT/.agent/run.lock"
 
 usage() { echo "usage: $0 <issue-number>" >&2; exit 2; }
 [[ -n "$ISSUE" ]] || usage

@@ -25,6 +25,10 @@ mkdir -p "$(dirname "$OUT")"
 
 # Use node for substitution to avoid sed's escaping woes with multi-line
 # bodies containing arbitrary punctuation.
+# NOTE: All env vars go BEFORE `node` — args after `-e '<script>'` are argv,
+# not env. Getting this wrong yields undefined process.env.* silently until
+# readFileSync crashes.
+TEMPLATE_PATH="$TEMPLATE" OUT_PATH="$OUT" \
 ISSUE_NUMBER="$ISSUE" ISSUE_TITLE="$title" ISSUE_BODY="$body" \
   node --input-type=module -e '
     import { readFileSync, writeFileSync } from "node:fs";
@@ -34,6 +38,6 @@ ISSUE_NUMBER="$ISSUE" ISSUE_TITLE="$title" ISSUE_BODY="$body" \
       .replaceAll("{{ISSUE_TITLE}}", process.env.ISSUE_TITLE)
       .replaceAll("{{ISSUE_BODY}}", process.env.ISSUE_BODY);
     writeFileSync(process.env.OUT_PATH, out);
-  ' TEMPLATE_PATH="$TEMPLATE" OUT_PATH="$OUT"
+  '
 
 echo "wrote $OUT (issue #$ISSUE)"

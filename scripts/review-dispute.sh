@@ -109,8 +109,8 @@ else
   # spec section(s). Falls back to a stub if gh is unavailable.
   if command -v gh >/dev/null 2>&1 && [[ "$ISSUE_NUMBER" != "0" ]]; then
     gh issue view "$ISSUE_NUMBER" --json title,body \
-      | node -e 'let s="";process.stdin.on("data",d=>s+=d).on("end",()=>{const j=JSON.parse(s);process.stdout.write(`# Issue #${process.env.N}: ${j.title}\n\n${j.body}\n`)})' \
-        N="$ISSUE_NUMBER" > .agent/review-inputs/issue.md
+      | N="$ISSUE_NUMBER" node -e 'let s="";process.stdin.on("data",d=>s+=d).on("end",()=>{const j=JSON.parse(s);process.stdout.write(`# Issue #${process.env.N}: ${j.title}\n\n${j.body}\n`)})' \
+        > .agent/review-inputs/issue.md
   else
     cat > .agent/review-inputs/issue.md <<EOF
 # Issue #$ISSUE_NUMBER (offline stub)
@@ -133,6 +133,9 @@ fi
 
 # ── Render the reviewer prompt ──────────────────────────────────────────────
 RENDERED=".agent/REVIEW.md"
+# NOTE: env vars BEFORE `node`; args after `-e '<script>'` are argv, not env.
+TEMPLATE_PATH="$REVIEW_TEMPLATE" OUT_PATH="$RENDERED" \
+ISSUE_NUMBER="$ISSUE_NUMBER" TEST_PATH="$TEST_PATH" \
 node --input-type=module -e '
   import { readFileSync, writeFileSync } from "node:fs";
   const tmpl = readFileSync(process.env.TEMPLATE_PATH, "utf8");
@@ -140,7 +143,7 @@ node --input-type=module -e '
     .replaceAll("{{ISSUE_NUMBER}}", process.env.ISSUE_NUMBER)
     .replaceAll("{{DISPUTED_TEST_PATH}}", process.env.TEST_PATH);
   writeFileSync(process.env.OUT_PATH, out);
-' TEMPLATE_PATH="$REVIEW_TEMPLATE" OUT_PATH="$RENDERED" ISSUE_NUMBER="$ISSUE_NUMBER" TEST_PATH="$TEST_PATH"
+'
 
 # ── Invoke the reviewer with the fencing flags ──────────────────────────────
 # NOTE: any change to the flags below MUST be mirrored in
