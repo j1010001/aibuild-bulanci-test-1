@@ -1,52 +1,87 @@
 #!/usr/bin/env bash
 # run-issue.sh — the loop. See spec §8 and §8.9.
 #
-# Usage: ./scripts/run-issue.sh <issue-number>
+# Two modes:
+#   ./scripts/run-issue.sh <issue-number>    (GitHub-issue mode)
+#   ./scripts/run-issue.sh --local <slug>    (local task mode)
+#
+# GitHub mode: claim `agent-ready`, work on branch issue-N, open PR on green.
+# Local mode: no GitHub, work on branch local/<slug>, print result on green.
+#   The task body comes from .agent/tasks/<slug>.md (see build-prompt.sh --local).
+#   Promotion to PR/main is deferred to `/promote-task`.
 #
 # Invariants enforced here (not just prompt-level):
-#   * Main is never touched: work happens in .worktrees/issue-N/ on branch issue-N.
+#   * Main is never touched: work happens in .worktrees/... on a branch.
 #   * Done is decided by verify.sh exit code, not by the agent's belief.
-#   * Bounded arbitration: reviewer runs at most once per issue on the same
+#   * Bounded arbitration: reviewer runs at most once per task on the same
 #     conclusion. A second DISPUTE.md after a DEV_WRONG verdict escalates.
-#   * Concurrent runs blocked by a lockfile.
+#   * Concurrent runs blocked by a lockfile (regardless of mode).
 
 set -euo pipefail
 
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 cd "$ROOT"
 
-# ── Config ──────────────────────────────────────────────────────────────────
-ISSUE="${1:-}"
+# ── Argument parsing ────────────────────────────────────────────────────────
+usage() { echo "usage: $0 <issue-number> | --local <slug>" >&2; exit 2; }
+
+MODE=""
+ISSUE=""
+SLUG=""
+
+if [[ "${1:-}" == "--local" ]]; then
+  MODE="local"
+  SLUG="${2:-}"
+  [[ -n "$SLUG" ]] || usage
+  [[ "$SLUG" =~ ^[a-z0-9][a-z0-9-]{0,29}$ ]] \
+    || { echo "slug must be kebab-case, 1-30 chars, [a-z0-9-]" >&2; exit 2; }
+  TASK_ID="local/$SLUG"
+  BRANCH="local/$SLUG"
+  WORKTREE=".worktrees/local-$SLUG"
+elif [[ "${1:-}" =~ ^[0-9]+$ ]]; then
+  MODE="issue"
+  ISSUE="$1"
+  TASK_ID="#$ISSUE"
+  BRANCH="issue-$ISSUE"
+  WORKTREE=".worktrees/issue-$ISSUE"
+else
+  usage
+fi
+
 MAX_ITERATIONS="${MAX_ITERATIONS:-15}"
 # Absolute path — the script cd's into the worktree before the trap fires;
 # a relative LOCK_DIR would make the trap look in the wrong directory and
 # leak the lock across runs.
 LOCK_DIR="$ROOT/.agent/run.lock"
 
-usage() { echo "usage: $0 <issue-number>" >&2; exit 2; }
-[[ -n "$ISSUE" ]] || usage
-[[ "$ISSUE" =~ ^[0-9]+$ ]] || { echo "issue must be numeric, got: $ISSUE" >&2; exit 2; }
+log() { printf '[run-issue %s] %s\n' "$TASK_ID" "$*"; }
+is_local() { [[ "$MODE" == "local" ]]; }
 
-log() { printf '[run-issue #%s] %s\n' "$ISSUE" "$*"; }
-
-# ── Preflight (§8.1) ────────────────────────────────────────────────────────
+# ── Preflight ───────────────────────────────────────────────────────────────
 command -v claude >/dev/null 2>&1 || { echo "claude not on PATH" >&2; exit 2; }
-command -v gh >/dev/null 2>&1 || { echo "gh not on PATH" >&2; exit 2; }
-gh auth status >/dev/null 2>&1 || { echo "run: gh auth login" >&2; exit 2; }
 
-# Verify the issue exists and has agent-ready.
-issue_json="$(gh issue view "$ISSUE" --json number,title,state,labels 2>/dev/null)" \
-  || { echo "issue #$ISSUE not found" >&2; exit 2; }
+if is_local; then
+  # Local mode: no gh needed. Task file must exist.
+  TASK_FILE=".agent/tasks/$SLUG.md"
+  [[ -f "$TASK_FILE" ]] || { echo "missing task file: $TASK_FILE" >&2; exit 2; }
+else
+  # GitHub mode: full preflight per spec §8.1.
+  command -v gh >/dev/null 2>&1 || { echo "gh not on PATH" >&2; exit 2; }
+  gh auth status >/dev/null 2>&1 || { echo "run: gh auth login" >&2; exit 2; }
 
-state="$(printf '%s' "$issue_json" | node -e 'let s="";process.stdin.on("data",d=>s+=d).on("end",()=>{const j=JSON.parse(s);process.stdout.write(j.state)})')"
-labels="$(printf '%s' "$issue_json" | node -e 'let s="";process.stdin.on("data",d=>s+=d).on("end",()=>{const j=JSON.parse(s);process.stdout.write(j.labels.map(l=>l.name).join(","))})')"
-title="$(printf '%s' "$issue_json" | node -e 'let s="";process.stdin.on("data",d=>s+=d).on("end",()=>{const j=JSON.parse(s);process.stdout.write(j.title)})')"
+  issue_json="$(gh issue view "$ISSUE" --json number,title,state,labels 2>/dev/null)" \
+    || { echo "issue #$ISSUE not found" >&2; exit 2; }
 
-[[ "$state" == "OPEN" ]] || { echo "issue #$ISSUE state=$state; must be OPEN" >&2; exit 2; }
-[[ ",$labels," == *",agent-ready,"* ]] || { echo "issue #$ISSUE lacks label agent-ready" >&2; exit 2; }
-[[ ",$labels," != *",agent:in-progress,"* ]] || { echo "issue #$ISSUE already agent:in-progress" >&2; exit 2; }
+  state="$(printf '%s' "$issue_json" | node -e 'let s="";process.stdin.on("data",d=>s+=d).on("end",()=>{const j=JSON.parse(s);process.stdout.write(j.state)})')"
+  labels="$(printf '%s' "$issue_json" | node -e 'let s="";process.stdin.on("data",d=>s+=d).on("end",()=>{const j=JSON.parse(s);process.stdout.write(j.labels.map(l=>l.name).join(","))})')"
+  title="$(printf '%s' "$issue_json" | node -e 'let s="";process.stdin.on("data",d=>s+=d).on("end",()=>{const j=JSON.parse(s);process.stdout.write(j.title)})')"
 
-# Working tree must be clean on main.
+  [[ "$state" == "OPEN" ]] || { echo "issue #$ISSUE state=$state; must be OPEN" >&2; exit 2; }
+  [[ ",$labels," == *",agent-ready,"* ]] || { echo "issue #$ISSUE lacks label agent-ready" >&2; exit 2; }
+  [[ ",$labels," != *",agent:in-progress,"* ]] || { echo "issue #$ISSUE already agent:in-progress" >&2; exit 2; }
+fi
+
+# Working tree must be clean on the current checkout (main).
 if [[ -n "$(git status --porcelain 2>/dev/null)" ]]; then
   echo "git working tree is dirty; commit or stash first" >&2
   git status --porcelain >&2
@@ -56,17 +91,18 @@ fi
 # ── Lock (§8.6) ─────────────────────────────────────────────────────────────
 if ! mkdir "$LOCK_DIR" 2>/dev/null; then
   echo "another run is active (lock: $LOCK_DIR); remove after confirming no claude is running" >&2
-  # Preflight lock-collision failure: we never claimed the label, so no
+  # Preflight lock-collision failure: we never claimed anything, so no
   # recovery needed. Skip the trap's recovery path.
   CLEAN_EXIT=1
   exit 2
 fi
 
-# CLEAN_EXIT is set to 1 by the success (§8.5) and exhaustion (§8.7) paths
-# before they exit. If the trap fires with CLEAN_EXIT unset, the run was
-# interrupted (Ctrl-C, crash, kill) between the label claim and one of the
-# terminal paths; the trap then relabels agent:in-progress back to
-# agent-ready so the issue is not stuck. See DECISIONS.md D14.
+# CLEAN_EXIT is set to 1 by every terminal path. If the trap fires with
+# CLEAN_EXIT unset, the run was interrupted (Ctrl-C, crash, kill) between the
+# label claim and one of the terminal paths; the trap then relabels
+# agent:in-progress back to agent-ready so the issue is not stuck.
+# In local mode there is no label to recover — the trap only removes the lock.
+# See DECISIONS.md D14.
 CLEAN_EXIT=0
 LABEL_CLAIMED=0
 
@@ -84,18 +120,29 @@ on_exit() {
 trap on_exit EXIT
 
 # ── Claim (§8.2) ────────────────────────────────────────────────────────────
-log "claim: add agent:in-progress, remove agent-ready"
-gh issue edit "$ISSUE" --add-label agent:in-progress --remove-label agent-ready >/dev/null
-LABEL_CLAIMED=1
+if is_local; then
+  log "local mode; no label to claim"
+else
+  log "claim: add agent:in-progress, remove agent-ready"
+  gh issue edit "$ISSUE" --add-label agent:in-progress --remove-label agent-ready >/dev/null
+  LABEL_CLAIMED=1
+fi
 
-# On failure paths, relabel back to needs-human (or leave in-progress with a note).
-# Marks CLEAN_EXIT=1 so the interrupted-run trap does not stomp the label back
-# to agent-ready.
+# On failure paths in GitHub mode, relabel to needs-human and post a log.
+# In local mode, just print — nothing to label, nothing to comment on.
 release_to_needs_human() {
   local reason_file="$1"
+  if is_local; then
+    log "escalation (local): reason in $reason_file"
+    if [[ -f "$reason_file" ]]; then
+      echo "--- $reason_file (tail) ---" >&2
+      tail -c 4000 "$reason_file" >&2 || true
+    fi
+    CLEAN_EXIT=1
+    return
+  fi
   gh issue edit "$ISSUE" --add-label agent:needs-human --remove-label agent:in-progress >/dev/null || true
   if [[ -f "$reason_file" ]]; then
-    # Only post the tail; the full log lives in the worktree.
     tail -c 15000 "$reason_file" | gh issue comment "$ISSUE" --body-file - >/dev/null || true
   else
     gh issue comment "$ISSUE" --body "Agent loop escalated to agent:needs-human. See worktree ${WORKTREE:-<n/a>}." >/dev/null || true
@@ -104,11 +151,8 @@ release_to_needs_human() {
 }
 
 # ── Isolate (§8.3) ──────────────────────────────────────────────────────────
-BRANCH="issue-$ISSUE"
-WORKTREE=".worktrees/issue-$ISSUE"
-
 log "fetch origin"
-git fetch origin --quiet
+git fetch origin --quiet 2>/dev/null || log "fetch origin failed (offline?); continuing with local refs"
 
 if [[ -d "$WORKTREE" ]]; then
   log "worktree exists; reusing $WORKTREE"
@@ -125,16 +169,27 @@ fi
 cd "$WORKTREE"
 mkdir -p .agent
 
-# The template lives at the repo root (checked in); build-prompt.sh renders
-# into the worktree's .agent/PROMPT.md via the template path relative to cwd.
+# The templates live at the repo root (checked in); copy them into the
+# worktree so the loop is self-contained.
 if [[ ! -f .agent/PROMPT.template.md ]]; then
-  # Copy checked-in template into the worktree so the loop is self-contained.
   cp "$ROOT/.agent/PROMPT.template.md" .agent/PROMPT.template.md
   cp "$ROOT/.agent/REVIEW.template.md" .agent/REVIEW.template.md
 fi
 
+# In local mode, the task file lives in the MAIN checkout's .agent/tasks/
+# (it is gitignored so it isn't on the branch). Copy it into the worktree so
+# build-prompt.sh --local can find it via its own relative path.
+if is_local; then
+  mkdir -p .agent/tasks
+  cp "$ROOT/.agent/tasks/$SLUG.md" ".agent/tasks/$SLUG.md"
+fi
+
 log "render .agent/PROMPT.md from template"
-bash "$ROOT/scripts/build-prompt.sh" "$ISSUE"
+if is_local; then
+  bash "$ROOT/scripts/build-prompt.sh" --local "$SLUG"
+else
+  bash "$ROOT/scripts/build-prompt.sh" "$ISSUE"
+fi
 
 # Track prior verdicts for bounded arbitration.
 PRIOR_DEV_WRONG=0
@@ -153,16 +208,20 @@ for ((i = 1; i <= MAX_ITERATIONS; i++)); do
 
     if [[ "$PRIOR_DEV_WRONG" -eq 1 ]]; then
       log "second DISPUTE.md after a DEV_WRONG verdict — escalating (§8.9 bounded-arbitration)"
-      {
-        echo "Bounded-arbitration invariant tripped: the agent raised a second dispute after a prior DEV_WRONG verdict on the same issue."
-        echo
-        echo "## Prior verdict"
-        cat .agent/DISPUTES/latest-verdict.md 2>/dev/null || echo "(missing)"
-        echo
-        echo "## Second dispute"
-        cat .agent/DISPUTE.md
-      } | gh issue comment "$ISSUE" --body-file - >/dev/null || true
-      gh issue edit "$ISSUE" --add-label agent:needs-human --remove-label agent:in-progress >/dev/null || true
+      if ! is_local; then
+        {
+          echo "Bounded-arbitration invariant tripped: the agent raised a second dispute after a prior DEV_WRONG verdict on the same issue."
+          echo
+          echo "## Prior verdict"
+          cat .agent/DISPUTES/latest-verdict.md 2>/dev/null || echo "(missing)"
+          echo
+          echo "## Second dispute"
+          cat .agent/DISPUTE.md
+        } | gh issue comment "$ISSUE" --body-file - >/dev/null || true
+        gh issue edit "$ISSUE" --add-label agent:needs-human --remove-label agent:in-progress >/dev/null || true
+      else
+        log "(local) both DISPUTE files preserved in .agent/DISPUTES/ for review"
+      fi
       CLEAN_EXIT=1
       exit 1
     fi
@@ -209,17 +268,21 @@ for ((i = 1; i <= MAX_ITERATIONS; i++)); do
         continue
         ;;
       "VERDICT: AMBIGUOUS")
-        log "AMBIGUOUS — escalating to agent:needs-human"
-        {
-          echo "Dispute-review returned AMBIGUOUS."
-          echo
-          echo "## Dispute"
-          cat "$archive/DISPUTE.md"
-          echo
-          echo "## Verdict"
-          cat "$archive/VERDICT.md"
-        } | gh issue comment "$ISSUE" --body-file - >/dev/null || true
-        gh issue edit "$ISSUE" --add-label agent:needs-human --remove-label agent:in-progress >/dev/null || true
+        log "AMBIGUOUS — escalating"
+        if ! is_local; then
+          {
+            echo "Dispute-review returned AMBIGUOUS."
+            echo
+            echo "## Dispute"
+            cat "$archive/DISPUTE.md"
+            echo
+            echo "## Verdict"
+            cat "$archive/VERDICT.md"
+          } | gh issue comment "$ISSUE" --body-file - >/dev/null || true
+          gh issue edit "$ISSUE" --add-label agent:needs-human --remove-label agent:in-progress >/dev/null || true
+        else
+          log "(local) DISPUTE and VERDICT archived in $archive for review"
+        fi
         CLEAN_EXIT=1
         exit 1
         ;;
@@ -255,7 +318,26 @@ for ((i = 1; i <= MAX_ITERATIONS; i++)); do
   if [[ $verify_rc -eq 0 ]]; then
     log "verify: GREEN — success path"
 
-    # Push branch, open PR, relabel.
+    if is_local; then
+      # Local mode: leave the branch on disk, print how to promote. No push,
+      # no PR, no label transitions. The task file, NOTES, verify log, and
+      # any screenshots all stay in .worktrees/local-$SLUG/.
+      log "branch local/$SLUG is green"
+      echo ""
+      echo "──────────────────────────────────────────────────────────────"
+      echo "  Task local/$SLUG passed verify."
+      echo "  Branch:   $BRANCH"
+      echo "  Worktree: $WORKTREE"
+      echo ""
+      echo "  Preview:  cd $WORKTREE && npm run dev"
+      echo "  Review:   git -C $WORKTREE log --oneline main.."
+      echo "  Promote:  /promote-task $SLUG   (in a claude code session)"
+      echo "──────────────────────────────────────────────────────────────"
+      CLEAN_EXIT=1
+      exit 0
+    fi
+
+    # GitHub mode: push branch, open PR, relabel.
     if ! git rev-parse HEAD >/dev/null 2>&1 || [[ -z "$(git log origin/main.. --oneline 2>/dev/null)" ]]; then
       log "no commits ahead of origin/main; treating as a spec-11.4-style empty implementation"
     fi
@@ -266,12 +348,11 @@ for ((i = 1; i <= MAX_ITERATIONS; i++)); do
       exit 1
     }
 
-    # Assemble PR body.
     body_file=".agent/PR-body.md"
     {
       echo "Closes #$ISSUE"
       echo
-      echo "## Acceptance criteria"
+      echo "## From the issue"
       gh issue view "$ISSUE" --json body --jq .body || true
       echo
       echo "## Verify output (tail)"
@@ -319,14 +400,23 @@ done
 
 # ── Exhaustion (§8.7) ───────────────────────────────────────────────────────
 log "budget exhausted after $MAX_ITERATIONS iterations"
-{
-  echo "Agent loop exhausted its budget ($MAX_ITERATIONS iterations) without a green verify."
-  echo
-  echo "## Last verify tail"
-  echo '```'
-  tail -c 15000 .agent/last-verify.log 2>/dev/null || echo "(no verify log)"
-  echo '```'
-} | gh issue comment "$ISSUE" --body-file - >/dev/null || true
-gh issue edit "$ISSUE" --add-label agent:needs-human --remove-label agent:in-progress >/dev/null || true
+if is_local; then
+  echo ""
+  echo "──────────────────────────────────────────────────────────────"
+  echo "  Task local/$SLUG exhausted its budget ($MAX_ITERATIONS iterations)."
+  echo "  Worktree kept for inspection: $WORKTREE"
+  echo "  Read: $WORKTREE/.agent/NOTES.md  and  $WORKTREE/.agent/last-verify.log"
+  echo "──────────────────────────────────────────────────────────────"
+else
+  {
+    echo "Agent loop exhausted its budget ($MAX_ITERATIONS iterations) without a green verify."
+    echo
+    echo "## Last verify tail"
+    echo '```'
+    tail -c 15000 .agent/last-verify.log 2>/dev/null || echo "(no verify log)"
+    echo '```'
+  } | gh issue comment "$ISSUE" --body-file - >/dev/null || true
+  gh issue edit "$ISSUE" --add-label agent:needs-human --remove-label agent:in-progress >/dev/null || true
+fi
 CLEAN_EXIT=1
 exit 1

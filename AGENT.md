@@ -66,6 +66,33 @@ npx playwright test
   `getState()` shape so Playwright can assert on it.
 - **Commits** reference the issue number: `issue #N: <what changed>`.
 
+## Local tasks (no GitHub, no PR)
+
+For ad-hoc work the operator wants to try without filing a GitHub issue:
+
+```
+./scripts/run-issue.sh --local <slug>
+```
+
+- Task body lives in `.agent/tasks/<slug>.md` (gitignored). Simple YAML
+  frontmatter (`title:` + `slug:` + `created:`) then Markdown body with
+  `## Summary` and `## Acceptance criteria` sections.
+- Branch: `local/<slug>`. Worktree: `.worktrees/local-<slug>/`. Neither is
+  pushed to the remote.
+- Success path prints how to preview and promote — no PR is opened.
+- Failure paths (budget exhausted, dispute AMBIGUOUS) leave the worktree in
+  place with `NOTES.md`, `last-verify.log`, and any `DISPUTES/` archive for
+  inspection.
+
+From within an interactive Claude Code session the recommended entry point
+is the `/new-task` slash command (see `.claude/commands/new-task.md`), which
+distills the operator's free-form request into pass/fail criteria before
+invoking the loop.
+
+Promotion to a GitHub PR or a `main` fast-forward is a separate step:
+`/promote-task <slug> [--pr | --main]` (see `.claude/commands/promote-task.md`).
+Default `--pr` opens the issue + PR; `--main` bypasses review and is warned.
+
 ## Protected paths (mechanical guard)
 
 The loop, its prompts, GitHub configuration, specs, the fencing canary, and

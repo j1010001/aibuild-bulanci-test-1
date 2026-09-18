@@ -187,3 +187,45 @@ trap relabels back to `agent-ready` and posts an "interrupted" comment only
 when `CLEAN_EXIT` is unset AND `LABEL_CLAIMED` is set — so lock-collision
 preflight failures (never claimed the label) skip recovery, and terminal
 paths that already handled labels are not stomped.
+
+## D15. Local-task flow — `/new-task` slash command (added 2026-09-18)
+
+Operator asked to remove GitHub-ceremony friction: kick off the loop from
+inside their claude code session, without filing an issue first, and defer
+the promote-to-PR step to when they say the branch is ready.
+
+Design: `scripts/run-issue.sh --local <slug>` reads a local task file
+(`.agent/tasks/<slug>.md`), works on branch `local/<slug>` in
+`.worktrees/local-<slug>/`, and prints (does not push) on green. The
+`.claude/commands/new-task.md` slash command drives the interactive claude
+session to distill pass/fail criteria from the operator's free-form request,
+get approval, materialize the task file, and invoke the loop.
+`.claude/commands/promote-task.md` promotes a green branch to a PR (default)
+or fast-forwards `main` (opt-in, warned).
+
+Key choices worth naming:
+
+- **Branch prefix `local/<slug>`.** The slash distinguishes it from the
+  `issue-N` naming and makes both modes safe to coexist in one repo.
+- **Task file gitignored.** Not part of any branch's history until
+  `promote-task --pr` copies it into the GitHub issue body. Rationale: keeps
+  failed local attempts fully off GitHub; the operator can iterate freely
+  without an audit-trail cost.
+- **Task file copied into the worktree.** The worktree cannot see the main
+  checkout's `.agent/tasks/` (different working tree). `run-issue.sh --local`
+  copies the file in so `build-prompt.sh` can render it via its own relative
+  path.
+- **Promote is manual, not automatic.** Operator explicitly asked for this.
+  Trade-off: forgets easily; branches can accumulate. Not fixing until it
+  proves a problem in practice.
+- **`--main` promotion is warned but supported.** Bypasses PR review, which
+  is the design's core human-in-the-loop guarantee. Kept as an escape hatch
+  because the operator asked for it. If misused it invalidates the design's
+  safety story — the warning marks that in the transcript.
+- **`.claude/commands/` NOT protected.** Slash commands are operator
+  convention, not part of the loop's own state. If a future issue starts
+  modifying them, add to the protected-paths set.
+- **Spec update deferred.** Local mode is currently an operator affordance,
+  not a design change. Once it settles in practice (a few successful
+  end-to-end cycles), land a spec revision adding an §12 "Operator workflows"
+  or similar. Documented here so it does not get forgotten.

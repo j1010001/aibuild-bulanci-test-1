@@ -29,5 +29,8 @@ test-results/
 # Worktrees created by run-issue.sh
 .worktrees/
 
+# Local task descriptions (--local mode; not tracked until promoted to a PR)
+.agent/tasks/
+
 # OS
 .DS_Store
