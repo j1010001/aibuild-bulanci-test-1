@@ -8,12 +8,14 @@
       html, body { margin: 0; padding: 0; height: 100%; background: #0a0a12; color: #e6e6f0; font-family: system-ui, sans-serif; }
       #app { position: relative; width: 100vw; height: 100vh; overflow: hidden; }
       #hud { position: absolute; top: 12px; left: 12px; z-index: 2; pointer-events: none; }
+      #greeting { position: absolute; top: 12px; right: 12px; z-index: 2; pointer-events: none; }
       canvas { display: block; }
     </style>
   </head>
   <body>
     <div id="app">
       <div id="hud" data-testid="hud">practice</div>
+      <div id="greeting" data-testid="greeting">Jan's first test</div>
     </div>
     <script type="module" src="/src/main.ts"></script>
   </body>
