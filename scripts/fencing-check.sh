@@ -73,8 +73,8 @@ fi
 
 grep -q -- '--tools' "$AUDIT_SCRIPT" \
   || fail "$AUDIT_SCRIPT missing --tools restriction"
-grep -qE '"Read,Write,Bash"' "$AUDIT_SCRIPT" \
-  || fail "$AUDIT_SCRIPT --tools list should be 'Read,Write,Bash' (no Edit — auditor writes only its verdict files)"
+grep -qE '"Read,Write,Edit,Bash"' "$AUDIT_SCRIPT" \
+  || fail "$AUDIT_SCRIPT --tools list should be 'Read,Write,Edit,Bash'"
 
 grep -qE -- '--permission-mode[[:space:]]+dontAsk' "$AUDIT_SCRIPT" \
   || fail "$AUDIT_SCRIPT must use --permission-mode dontAsk"

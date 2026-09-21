@@ -104,7 +104,7 @@ rm -f "$VERDICT_FILE" .agent/SPEC-PROPOSAL.md
 set +e
 claude -p \
   --permission-mode dontAsk \
-  --tools "Read,Write,Bash" \
+  --tools "Read,Write,Edit,Bash" \
   --allowedTools \
     "Read(.agent/audit-inputs/**)" \
     "Read(.agent/AUDIT.md)" \
@@ -114,6 +114,8 @@ claude -p \
     "Read(tests/e2e/output/**)" \
     "Write(.agent/INTENT-AUDIT.md)" \
     "Write(.agent/SPEC-PROPOSAL.md)" \
+    "Edit(.agent/INTENT-AUDIT.md)" \
+    "Edit(.agent/SPEC-PROPOSAL.md)" \
   --disallowedTools \
     "Read(tests/**/*.spec.ts)" \
     "Read(tests/**/*.test.ts)" \
