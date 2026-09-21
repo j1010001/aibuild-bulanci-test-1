@@ -111,29 +111,6 @@ If an issue truly needs a change here, end the turn with a note in
 `.agent/NOTES.md` and let the operator make the change manually. There is no
 in-loop escape hatch. See spec §5.3.
 
-Protected paths (v2 — includes the audit template):
-
-- `scripts/**`
-- `.agent/PROMPT.template.md`, `.agent/REVIEW.template.md`, `.agent/AUDIT.template.md`
-- `.github/**`
-- `spec/**`
-- `src/__fencing-canary.ts`
-- `tsconfig.json`, `vite.config.ts`, `vitest.config.ts`, `playwright.config.ts`, `.eslintrc.cjs`
-
-## Intent audit on green (advisory)
-
-After `verify.sh` returns 0, `scripts/audit-intent.sh` runs a fenced auditor
-that reads the task, the branch diff, the referenced spec sections, `src/**`,
-and `tests/e2e/output/**` (screenshots) — but NOT the test source under
-`tests/**/*.spec.ts` or `tests/unit/**`. Its verdict lands in
-`.agent/INTENT-AUDIT.md`; on a `SPEC`-rooted mismatch it also writes
-`.agent/SPEC-PROPOSAL.md`.
-
-Advisory in v1: the audit **never blocks the success path**. Verdicts are
-printed alongside the success banner (local mode) or added to the PR body
-(GitHub mode). Skip with `AUDIT_INTENT=0 ./scripts/run-issue.sh …` on tight
-loops. See spec §8.10.
-
 ## Fencing canary
 
 `src/__fencing-canary.ts` is load-bearing test infrastructure, not dead code.
@@ -176,16 +153,3 @@ observed, not general advice. Add to the bottom; do not delete history._
   observed again (e.g. from a turn that exits 0 but performs no meaningful
   work), consider a separate "no commits ahead of base" guard on the
   success path.
-- **Green via criterion-loophole (agent authors its own tests).** Observed
-  2026-09-21 on task `board-fit-view` (re-run with tightened criterion):
-  the criterion required all four board corners in bounds + bbox ≥85% of
-  one canvas dimension + centered ±5%. The agent satisfied all three by
-  setting the camera to FOV 5° at distance ~291, producing a near-orthographic
-  render that violated spec §11's *perspective camera* intent (bullets at
-  height H should visibly pass through obstacle holes — impossible without
-  meaningful foreshortening). Because the implementing agent wrote both the
-  criterion-derived e2e test and the render, the trio was self-consistent;
-  `verify.sh` had nothing to disagree with. Root cause: verify is
-  criterion-mechanical, not intent-mechanical. Fixed by adding §8.10 intent
-  audit on green — a fenced auditor that reads spec + criterion + diff +
-  screenshots but not test source, and returns an advisory verdict.

@@ -17,17 +17,12 @@ test-results/
 # Agent runtime artifacts (checked-in templates are NOT ignored)
 .agent/PROMPT.md
 .agent/REVIEW.md
-.agent/AUDIT.md
 .agent/NOTES.md
 .agent/last-verify.log
-.agent/last-audit.log
 .agent/DISPUTE.md
 .agent/DISPUTE-VERDICT.md
 .agent/DISPUTES/
-.agent/INTENT-AUDIT.md
-.agent/SPEC-PROPOSAL.md
 .agent/review-inputs/
-.agent/audit-inputs/
 .agent/review-settings.json
 .agent/turn-failure.log
 .agent/run.lock

@@ -173,7 +173,7 @@ mkdir -p .agent
 # already in the worktree via git. Per-file bootstrap (not all-or-nothing):
 # a template introduced on main after origin/main was last pushed would
 # otherwise be silently skipped because the older siblings arrived via git.
-for t in PROMPT.template.md REVIEW.template.md AUDIT.template.md; do
+for t in PROMPT.template.md REVIEW.template.md; do
   [[ -f ".agent/$t" ]] || cp "$ROOT/.agent/$t" ".agent/$t"
 done
 
@@ -344,24 +344,6 @@ for ((i = 1; i <= MAX_ITERATIONS; i++)); do
   if [[ $verify_rc -eq 0 ]]; then
     log "verify: GREEN — success path"
 
-    # Intent audit (§8.10) — advisory only, gated by AUDIT_INTENT (default 1).
-    # Runs on every green; never blocks the success path. Verdict lands in
-    # .agent/INTENT-AUDIT.md and is surfaced alongside the success banner /
-    # PR body below.
-    AUDIT_INTENT="${AUDIT_INTENT:-1}"
-    if [[ "$AUDIT_INTENT" == "1" ]]; then
-      log "intent audit (advisory)"
-      set +e
-      bash "$ROOT/scripts/audit-intent.sh" > .agent/last-audit.log 2>&1
-      set -e
-      if [[ -f .agent/INTENT-AUDIT.md ]]; then
-        audit_line="$(head -n1 .agent/INTENT-AUDIT.md)"
-        log "audit: $audit_line"
-      fi
-    else
-      log "intent audit skipped (AUDIT_INTENT=0)"
-    fi
-
     if is_local; then
       # Local mode: leave the branch on disk, print how to promote. No push,
       # no PR, no label transitions. The task file, NOTES, verify log, and
@@ -373,16 +355,6 @@ for ((i = 1; i <= MAX_ITERATIONS; i++)); do
       echo "  Branch:   $BRANCH"
       echo "  Worktree: $WORKTREE"
       echo ""
-      if [[ -f .agent/INTENT-AUDIT.md ]]; then
-        echo "  Intent audit (advisory, spec §8.10):"
-        sed 's/^/    /' .agent/INTENT-AUDIT.md
-        echo ""
-        if [[ -f .agent/SPEC-PROPOSAL.md ]]; then
-          echo "  Spec-proposal (SPEC root cause):"
-          sed 's/^/    /' .agent/SPEC-PROPOSAL.md
-          echo ""
-        fi
-      fi
       echo "  Preview:  cd $WORKTREE && npm run dev"
       echo "  Review:   git -C $WORKTREE log --oneline main.."
       echo "  Promote:  /promote-task $SLUG   (in a claude code session)"
@@ -414,16 +386,6 @@ for ((i = 1; i <= MAX_ITERATIONS; i++)); do
       tail -c 8000 .agent/last-verify.log
       echo '```'
       echo
-      if [[ -f .agent/INTENT-AUDIT.md ]]; then
-        echo "## Intent audit (advisory, spec §8.10)"
-        cat .agent/INTENT-AUDIT.md
-        echo
-        if [[ -f .agent/SPEC-PROPOSAL.md ]]; then
-          echo "### Spec-proposal (SPEC root cause)"
-          cat .agent/SPEC-PROPOSAL.md
-          echo
-        fi
-      fi
       if compgen -G "tests/e2e/output/*.png" > /dev/null; then
         echo "## E2E screenshots"
         for p in tests/e2e/output/*.png; do

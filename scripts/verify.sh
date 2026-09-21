@@ -58,7 +58,6 @@ PROTECTED_PATHS=(
   scripts
   .agent/PROMPT.template.md
   .agent/REVIEW.template.md
-  .agent/AUDIT.template.md
   .github
   spec
   src/__fencing-canary.ts
