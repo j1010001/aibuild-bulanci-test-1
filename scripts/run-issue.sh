@@ -302,6 +302,31 @@ for ((i = 1; i <= MAX_ITERATIONS; i++)); do
   set -e
   log "claude turn exit=$turn_rc"
 
+  # A non-zero exit from claude means the turn produced no work: the CLI
+  # bailed before the agent could act (not logged in, credit exhausted, killed
+  # mid-turn, harness failure). Running verify.sh anyway is unsafe — if the
+  # pre-turn tree already passes verify (walking skeleton before any change),
+  # the loop would declare GREEN against work that never happened. Escalate.
+  # Spec §8.5.
+  if [[ $turn_rc -ne 0 ]]; then
+    log "claude turn produced no work (exit=$turn_rc); escalating"
+    turn_reason=".agent/turn-failure.log"
+    {
+      echo "The claude turn subprocess exited with status $turn_rc."
+      echo
+      echo "Common causes:"
+      echo "  - 'claude' CLI not logged in (run 'claude' interactively and complete /login)"
+      echo "  - session credit exhausted or rate-limited"
+      echo "  - subprocess killed (SIGTERM/SIGKILL) mid-turn"
+      echo "  - transient network failure"
+      echo
+      echo "Nothing was committed. verify.sh was NOT run; declaring the branch"
+      echo "green off pre-turn state would be a false success."
+    } > "$turn_reason"
+    release_to_needs_human "$turn_reason"
+    exit 1
+  fi
+
   # If the agent wrote a DISPUTE.md this turn, the next iteration routes to
   # the reviewer. We do NOT run verify.sh when a dispute is pending (§7).
   if [[ -f .agent/DISPUTE.md ]]; then

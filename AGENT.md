@@ -141,3 +141,15 @@ spec/                design specs (game + build-system)
 
 _This section grows over time. Each entry names a specific failure once
 observed, not general advice. Add to the bottom; do not delete history._
+
+- **False GREEN when `claude` exits non-zero.** Observed 2026-09-19 on task
+  `board-fit-view`: the local `claude` CLI was not logged in, so the turn
+  subprocess exited immediately with "Not logged in · Please run /login"
+  (rc=1). `run-issue.sh` captured the exit code, logged it, then ran
+  `verify.sh` on the still-unchanged worktree; the walking skeleton passed
+  verify, and the loop reported "verify: GREEN — success path" against a
+  branch identical to `main`. Fixed by escalating immediately on non-zero
+  turn exit (spec §8.5, revised). If a similar false-GREEN pattern is
+  observed again (e.g. from a turn that exits 0 but performs no meaningful
+  work), consider a separate "no commits ahead of base" guard on the
+  success path.

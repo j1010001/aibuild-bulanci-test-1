@@ -441,7 +441,15 @@ inside the worktree. `main` is never touched by the agent.
 - `cat .agent/PROMPT.md | claude -p --dangerously-skip-permissions`
   (DECISION: the flag is required for unattended operation; the blast radius is
   contained to the worktree. Document this prominently in the README.)
-- then `./verify.sh > .agent/last-verify.log 2>&1`.
+- If `claude` exits non-zero, the turn produced no work (CLI bailed before the
+  agent could act — not logged in, credit exhausted, killed mid-turn, harness
+  failure). The loop must NOT then run `verify.sh` and declare success off the
+  pre-turn tree; a walking skeleton that already passes verify would produce a
+  false GREEN against work that never happened. Instead: escalate immediately
+  via the standard needs-human path (issue comment + label in GitHub mode,
+  banner in local mode), and exit 1. This is orthogonal to the exhaustion path
+  (§8.7), which fires only after MAX_ITERATIONS of *executed* turns.
+- Otherwise: `./verify.sh > .agent/last-verify.log 2>&1`.
 - If verify exits 0: **success path** — push branch, open PR with
   `gh pr create --title "issue #N: <title>" --body-file -` where the PR body contains:
   the issue link, the full acceptance criteria, the *tail of last-verify.log* as
