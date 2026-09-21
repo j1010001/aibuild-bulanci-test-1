@@ -169,13 +169,13 @@ fi
 cd "$WORKTREE"
 mkdir -p .agent
 
-# The templates live at the repo root (checked in); copy them into the
-# worktree so the loop is self-contained.
-if [[ ! -f .agent/PROMPT.template.md ]]; then
-  cp "$ROOT/.agent/PROMPT.template.md" .agent/PROMPT.template.md
-  cp "$ROOT/.agent/REVIEW.template.md" .agent/REVIEW.template.md
-  cp "$ROOT/.agent/AUDIT.template.md" .agent/AUDIT.template.md
-fi
+# The templates live at the repo root (checked in); copy any that are not
+# already in the worktree via git. Per-file bootstrap (not all-or-nothing):
+# a template introduced on main after origin/main was last pushed would
+# otherwise be silently skipped because the older siblings arrived via git.
+for t in PROMPT.template.md REVIEW.template.md AUDIT.template.md; do
+  [[ -f ".agent/$t" ]] || cp "$ROOT/.agent/$t" ".agent/$t"
+done
 
 # In local mode, the task file lives in the MAIN checkout's .agent/tasks/
 # (it is gitignored so it isn't on the branch). Copy it into the worktree so
