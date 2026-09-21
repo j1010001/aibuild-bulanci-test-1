@@ -18,6 +18,8 @@ CANARY_FILE="src/__fencing-canary.ts"
 CANARY_TOKEN="FENCING_CANARY_9F3A2C"
 REVIEW_SCRIPT="scripts/review-dispute.sh"
 REVIEW_TEMPLATE=".agent/REVIEW.template.md"
+AUDIT_SCRIPT="scripts/audit-intent.sh"
+AUDIT_TEMPLATE=".agent/AUDIT.template.md"
 
 fail() {
   printf '[fencing] %s\n' "$*" >&2
@@ -58,5 +60,37 @@ grep -Fq 'Your default disposition is `DEV_WRONG`' "$REVIEW_TEMPLATE" \
 
 grep -Fq 'Return `AMBIGUOUS` only when the acceptance criterion itself is under-specified' "$REVIEW_TEMPLATE" \
   || fail "$REVIEW_TEMPLATE missing verbatim: Return \`AMBIGUOUS\` only when the acceptance criterion itself is under-specified"
+
+# 4. audit-intent.sh (§8.10) fencing flags. Same invariants as the reviewer,
+# with a different denied path set: the auditor must NOT see test-source
+# files, otherwise it rationalizes the implementation from them and the
+# tautology this step exists to break is preserved.
+[[ -f "$AUDIT_SCRIPT" ]] || fail "auditor script missing: $AUDIT_SCRIPT"
+
+if grep -vE '^\s*#' "$AUDIT_SCRIPT" | grep -qE '(^|[^`"'"'"'a-zA-Z0-9-])--dangerously-skip-permissions'; then
+  fail "$AUDIT_SCRIPT uses --dangerously-skip-permissions; fencing is void."
+fi
+
+grep -q -- '--tools' "$AUDIT_SCRIPT" \
+  || fail "$AUDIT_SCRIPT missing --tools restriction"
+grep -qE '"Read,Write,Bash"' "$AUDIT_SCRIPT" \
+  || fail "$AUDIT_SCRIPT --tools list should be 'Read,Write,Bash' (no Edit — auditor writes only its verdict files)"
+
+grep -qE -- '--permission-mode[[:space:]]+dontAsk' "$AUDIT_SCRIPT" \
+  || fail "$AUDIT_SCRIPT must use --permission-mode dontAsk"
+
+grep -q 'Read(tests/\*\*/\*.spec.ts)' "$AUDIT_SCRIPT" \
+  || fail "$AUDIT_SCRIPT must deny 'Read(tests/**/*.spec.ts)'"
+grep -q 'Read(tests/unit/\*\*)' "$AUDIT_SCRIPT" \
+  || fail "$AUDIT_SCRIPT must deny 'Read(tests/unit/**)'"
+
+# 5. AUDIT template contains the verbatim load-bearing phrases (spec §8.10).
+[[ -f "$AUDIT_TEMPLATE" ]] || fail "audit template missing: $AUDIT_TEMPLATE"
+
+grep -Fq 'Your default disposition is `INTENT_HONORED`' "$AUDIT_TEMPLATE" \
+  || fail "$AUDIT_TEMPLATE missing verbatim: Your default disposition is \`INTENT_HONORED\`"
+
+grep -Fq 'Return `UNCLEAR` only when both the spec and the criterion are genuinely' "$AUDIT_TEMPLATE" \
+  || fail "$AUDIT_TEMPLATE missing verbatim: UNCLEAR reserved for cases where intent is not written down"
 
 echo "[fencing] static checks OK"

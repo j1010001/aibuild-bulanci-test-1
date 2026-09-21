@@ -570,6 +570,92 @@ additionally commits the minimal test correction on the issue branch with messag
 **Cost note**: the dispute-review consumes one iteration of `MAX_ITERATIONS`. The
 reviewer's session is typically short (small fenced context, single-file output).
 
+### 8.10 Intent audit on green (advisory)
+
+Triggered after `verify.sh` returns 0, before the success path (push+PR in GitHub
+mode; success banner in local mode). Runs once per green, never blocks the run
+in v1 — its output is advisory, printed to the operator alongside the success
+banner. Gated by `AUDIT_INTENT` (default: 1; set to 0 to skip).
+
+**Motivation.** Verify checks that the criterion-derived tests pass, but the
+implementing agent authors both the tests and the code from the same criterion;
+if the criterion has a loophole, the (criterion, test, impl) trio is mutually
+consistent by construction and verify has nothing to disagree with. Observed
+regression: a "fit board in view" criterion (visible + 85% fill + centered ±5%)
+was satisfied by a 5° FOV telephoto camera that flattened the board to
+near-orthographic, violating spec §11's perspective intent — verify passed, a
+human caught it. The audit closes this gap by giving spec+criterion+diff to a
+fenced reviewer that doesn't see the tests.
+
+**Invocation**: `scripts/audit-intent.sh` starts a fresh fenced agent using
+`.agent/AUDIT.template.md` as its standing prompt. The fence is enforced by the
+tool's permission mechanism — same rules as §8.9's reviewer, different
+allowlist:
+
+- **Allowed reads**: `spec/**`, `.agent/audit-inputs/**` (materialized task
+  body + spec section extracts + branch diff), `src/**`, `tests/e2e/output/**`
+  (screenshots only), `.agent/AUDIT.md` (rendered prompt),
+  `.agent/last-verify.log`.
+- **Denied reads**: `tests/**/*.spec.ts`, `tests/**/*.test.ts`,
+  `tests/unit/**`, `.agent/NOTES.md`, `.agent/PROMPT.md`, `.agent/DISPUTES/**`,
+  `WebFetch`, `WebSearch`.
+- **Writes**: only `.agent/INTENT-AUDIT.md` and `.agent/SPEC-PROPOSAL.md`.
+- **No `--dangerously-skip-permissions`**. `--permission-mode dontAsk`.
+
+Denying test-source reads is the load-bearing property: an auditor that sees
+the tests can rationalize the implementation from them ("the test says fill
+≥85%; the impl satisfies that; therefore fine"), which reproduces the exact
+tautology the audit exists to break. Enforced by `scripts/fencing-check.sh`.
+
+**Verdicts** (strict format; first line of `INTENT-AUDIT.md` is one of):
+
+- `VERDICT: INTENT_HONORED` — implementation observably matches the intent
+  encoded in spec + criterion. No further action.
+- `VERDICT: INTENT_MISMATCH` — a concrete observable contradicts a specific
+  spec or criterion phrase. Rationale must (a) quote the spec/criterion
+  passage, (b) name the observable (screenshot path, log line, or source-file
+  quote), (c) classify the root cause: `CRITERION`, `SPEC`, or
+  `IMPLEMENTATION`.
+- `VERDICT: UNCLEAR` — spec and criterion are both silent on the point in
+  question. Advisory to operator that the intent for this dimension isn't
+  written down anywhere.
+
+Root-cause classification drives the advisory:
+
+- `IMPLEMENTATION` — spec+criterion are clear; the impl just missed. Operator
+  can re-run the loop with the same criterion; the loop's next turn will see
+  `INTENT-AUDIT.md` in its context and iterate.
+- `CRITERION` — spec is clear but the criterion under-specifies. Operator
+  tightens the task file and re-runs.
+- `SPEC` — the spec itself is ambiguous or silent on the intent that got
+  violated. Auditor **must also write** `.agent/SPEC-PROPOSAL.md` — a minimal
+  patch proposal naming the exact spec section, the current text, and the
+  proposed replacement that would close the ambiguity. Operator reviews and
+  applies (or discards) the proposal; the spec is a human-owned artifact and
+  the auditor never edits it directly.
+
+**Default disposition**: `INTENT_HONORED`. The auditor's bias must resist
+finding faults. A concrete spec/criterion quote anchor and a concrete
+observable are required for any `INTENT_MISMATCH`; hand-waving about "aesthetic
+intent" or "surely the designer meant" returns `INTENT_HONORED`.
+
+**Advisory-only in v1**: an `INTENT_MISMATCH` verdict does not fail the run,
+does not write a `DISPUTE.md`, does not block the success path. Printed
+alongside the success banner (local mode) or added as a PR comment (GitHub
+mode). This lets the operator observe the auditor's false-positive rate before
+promoting it to a hard gate. Future versions may promote `INTENT_MISMATCH` to
+a dispute trigger with bounded arbitration analogous to §8.9.
+
+**Failure modes accepted in v1**:
+- Auditor hallucination: it may quote a spec section that doesn't say what it
+  claims. The strict format (spec quote + concrete observable) makes this
+  visible; operator judgment is the mitigation.
+- Cost: one extra fenced turn per green iteration. Skippable via `AUDIT_INTENT=0`
+  for tight loops on low-risk tasks.
+
+**Cost note**: the audit does NOT consume an iteration of `MAX_ITERATIONS`. It
+runs after the loop's success decision, purely for advisory output.
+
 ## 9. Requirement on the game app: the test hook
 
 The walking skeleton — and all later game code — must expose, in dev mode only:
