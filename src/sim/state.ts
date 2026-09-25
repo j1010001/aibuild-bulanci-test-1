@@ -1,67 +1,82 @@
-// Deterministic simulation core skeleton.
-//
-// Contract (from game spec §4): pure TypeScript. NO DOM imports, NO three.js
-// imports, NO WebRTC imports. Deterministic function of its inputs.
-// Gameplay issues extend this file (state shape, step function, events).
-//
-// The walking skeleton has an empty world so verify.sh's e2e smoke can prove
-// the `window.__game` hook and practice-mode wiring work end-to-end before
-// any gameplay exists.
+// createGame(RAPIER, config, map, roster) -> State (spec §4, §6, §10). Builds the real
+// physics world (spec §7) once at load time and places the roster into it via spawn
+// fairness — the same real-3D queries used every tick, not a separate 2D approximation.
 
-export type Direction = "+X" | "-X" | "+Y" | "-Y";
-export type MoveDir = Direction | "none";
+import { PhysicsWorld } from '../physics/world';
+import type { Rapier } from '../physics/rapier';
+import { assignSpawns } from './spawn';
+import type { Config, GameEvent, MapDef, Player, PlayerId, State } from './types';
 
-export interface Vec2 {
-  x: number;
-  y: number;
-}
+export const DEFAULT_CONFIG: Config = {
+  playerRadius: 0.5,
+  // Real capsule/cylinder collision height (spec §5). Must exceed bulletHeight so a
+  // bullet reaching a player always kills, and — separately — must leave room between
+  // itself and bulletHeight for an arch's doorHeight to meaningfully distinguish
+  // "a player fits under this" from "a bullet flies under this" (see defaultMap.ts).
+  playerHeight: 1.2,
+  muzzleOffset: 0.8,
+  bulletHeight: 0.9,
+  playerSpeed: 6,
+  bulletSpeed: 18,
+  cadence: 800,
+  targetScore: 3,
+  roundTime: 60,
+  maxPlayers: 8,
+  practice: false,
+  spawnSeparation: 5,
+  spawnEdgeMargin: 2,
+  board: { width: 40, height: 40 },
+};
 
-export interface Player {
-  id: string;
-  pos: Vec2;
-  facing: Direction;
-  alive: boolean;
-}
+export type RosterEntry = { id: PlayerId; name: string; skinId: string };
 
-export interface Bullet {
-  id: string;
-  ownerId: string;
-  pos: Vec2;
-  dir: Direction;
-}
+export function createGame(
+  RAPIER: Rapier,
+  configOverrides: Partial<Config>,
+  map: MapDef,
+  roster: readonly RosterEntry[],
+): { state: State; events: GameEvent[] } {
+  const config: Config = {
+    ...DEFAULT_CONFIG,
+    ...configOverrides,
+    board: { ...DEFAULT_CONFIG.board, ...(configOverrides.board ?? map.board) },
+  };
 
-export type Phase = "lobby" | "round" | "matchEnd" | "practice";
+  const physics = new PhysicsWorld(RAPIER, map, { playerRadius: config.playerRadius, playerHeight: config.playerHeight });
 
-export interface State {
-  phase: Phase;
-  tick: number;
-  players: Player[];
-  bullets: Bullet[];
-}
+  const players: Player[] = roster.map((r) => ({
+    id: r.id,
+    name: r.name,
+    skinId: r.skinId,
+    pos: { x: 0, y: 0 },
+    facing: '+X',
+    lastShotAt: -Infinity,
+    alive: true,
+    connected: true,
+  }));
+  for (const p of players) physics.addPlayer(p.id, p.pos);
 
-export interface Input {
-  playerId: string;
-  moveDir: MoveDir;
-  shoot: boolean;
-}
+  const scores: Record<PlayerId, number> = {};
+  for (const p of players) scores[p.id] = 0;
 
-export function createPracticeState(): State {
-  return {
-    phase: "practice",
-    tick: 0,
-    players: [],
+  const state: State = {
+    config,
+    phase: 'round',
+    roundNumber: 1,
+    scores,
+    players,
+    obstacles: map.obstacles,
     bullets: [],
+    time: 0,
+    roundStartedAt: 0,
+    winnerId: null,
+    nextBulletSeq: 0,
+    physics,
   };
-}
 
-// Pure step function. Skeleton version: advances tick, otherwise no-op.
-// Gameplay issues will implement movement, shooting, and collision here.
-export function step(state: State, _inputs: Input[], _dt: number): { state: State; events: readonly unknown[] } {
-  const next: State = {
-    ...state,
-    tick: state.tick + 1,
-    players: state.players.slice(),
-    bullets: state.bullets.slice(),
-  };
-  return { state: next, events: [] };
+  const events: GameEvent[] = [];
+  assignSpawns(state, events);
+  events.push({ kind: 'roundStart', roundNumber: state.roundNumber });
+
+  return { state, events };
 }

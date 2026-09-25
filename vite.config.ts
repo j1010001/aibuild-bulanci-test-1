@@ -1,16 +1,11 @@
-import { defineConfig } from "vite";
+import { defineConfig } from 'vite';
 
 export default defineConfig({
-  root: ".",
+  root: '.',
   server: {
-    port: 5173,
-    strictPort: true,
-  },
-  build: {
-    outDir: "dist",
-    sourcemap: true,
-  },
-  define: {
-    __DEV__: JSON.stringify(true),
+    // No hardcoded port: respects the PORT env var so the dev server can be assigned
+    // a free port when 5173 is already taken by another session.
+    port: Number(process.env.PORT) || 5173,
+    strictPort: false,
   },
 });
