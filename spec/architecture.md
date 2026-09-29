@@ -36,7 +36,7 @@ flowchart LR
     Sim["Simulation<br/>src/sim (built)"]
     Physics["PhysicsWorld (Rapier)<br/>src/physics (built)"]
     Geometry["Geometry<br/>src/geometry (built)"]
-    MapFormat["Map loader/validator<br/>src/sim/mapFormat.ts (M0)"]
+    MapFormat["Map loader/validator<br/>src/sim/mapFormat.ts (built)"]
   end
 
   subgraph Server["Game server (Node only)"]
@@ -77,7 +77,7 @@ flowchart LR
 | **Geometry** | The single conversion from an obstacle's authoring params, and from the player config, to 3D parts (box, cone, cylinder, trimesh; players convex only). Both physics and rendering consume this output, so what you see is what collides (§7, §11). | `src/geometry/obstacleGeometry.ts`, `donutMesh.ts`, `playerGeometry.ts` | built |
 | **PhysicsWorld** | A Rapier world used purely for collision queries: obstacle colliders built once per game, one kinematic body per player. Answers `moveDistance` (shape-cast sweep), `gunFits` (overlap), `raycastBullet`, `isFreeOfObstacles`. The one live, non-serializable part of `State`. | `src/physics/world.ts`, `obstacles.ts`, `rapier.ts` | built |
 | **Simulation (`sim`)** | Game rules. `createGame(RAPIER, config, map, roster, seed)` and `step(state, inputs, dt) → {state, events}`: movement, turning, shooting, deaths, rounds, match, spawns. Deterministic given the seed (§4). | `src/sim/{state,step,spawn,rng,types,snapshot}.ts` | built |
-| **Map loader** | The one entry point for every map (built-in, preset, import, received by the server): version check, defaults, hard constraints. | `src/sim/mapFormat.ts` | M0 |
+| **Map loader** | The one entry point for every map (built-in, preset, import, received by the server): version check, defaults, hard constraints. | `src/sim/mapFormat.ts` | built |
 | **GameApi** | A control surface over one game: roster, `start({seed})`, `setMoveDir` / `pressShoot`, `tick` / `runTicks`, `getState` / `getEvents`, `pause` / `resume`. A Room and AI harnesses call the same methods. Exposed as `window.GameAPI` during practice. | `src/api.ts` | built |
 | **Room** | The session: lobby (roster, owner, unique skins, ready, map, config, start gate), match lifecycle, input latching, disconnect/reconnect, ownership transfer. Emits protocol messages. Time is injected; it never owns a timer. | `src/session/room.ts`, `protocol.ts`, `maps.ts` | built |
 | **Game server** | Node shell: WebSocket connections (per-socket size, rate and failed-join limits; connection and room caps; heartbeat), room codes, one drift-corrected 60 Hz loop for all rooms, empty-room cleanup. The only place Node APIs are allowed. | `server/*` | built |
@@ -145,7 +145,7 @@ State outside physics is copied per tick. The physics world is shared and mutate
 
 ```mermaid
 flowchart LR
-  Map["MapDef (JSON)"] --> Loader["mapFormat: validate + defaults (M0)"]
+  Map["MapDef (JSON)"] --> Loader["mapFormat: validate + defaults"]
   Loader --> Def["ObstacleDef[]"]
   Def --> Build["buildObstacleGeometry(def)"]
   Build -->|"box / cone / trimesh parts"| Colliders["physics/obstacles.ts → Rapier colliders"]

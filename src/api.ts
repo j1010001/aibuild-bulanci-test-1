@@ -5,7 +5,7 @@
 //
 // DOM-free and importable from the browser, from Node test scripts, or from vitest.
 
-import { createGame, DEFAULT_CONFIG, DEFAULT_MAP, step, toSnapshot } from './sim';
+import { createGame, DEFAULT_CONFIG, DEFAULT_MAP, parseMap, step, toSnapshot } from './sim';
 import type { Config, Direction, GameEvent, MapDef, Player, PlayerId, PublicState, State } from './sim';
 import { ensureRapierReady } from './physics/rapier';
 import { SKIN_PALETTE } from './sim/skins';
@@ -63,12 +63,15 @@ export class GameApi {
     if (this.roster.length === 0) {
       throw new Error('GameApi.start: add at least one player to the roster first');
     }
+    // Every map enters a game here, so this is where it is validated (spec §13).
+    const parsed = parseMap(map);
+    if (!parsed.ok) throw new Error(`GameApi.start: invalid map: ${parsed.errors.join('; ')}`);
     const RAPIER = await ensureRapierReady();
     this.state?.physics.dispose();
     // Picked here, outside the sim, and recorded on State (getState().seed), so an
     // unseeded run can still be replayed exactly by passing that seed back in.
     const seed = options.seed ?? Math.floor(Math.random() * 2 ** 32);
-    const { state, events } = createGame(RAPIER, configOverrides, map, this.roster, seed);
+    const { state, events } = createGame(RAPIER, configOverrides, parsed.map, this.roster, seed);
     this.state = state;
     this.eventLog = [...events];
     this.tickCount = 0;

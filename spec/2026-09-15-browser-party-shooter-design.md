@@ -663,9 +663,9 @@ is no peer-to-peer traffic.
      bidirectional overrides), and must be 1–20 characters long, counted in characters.
    - A refused action is answered with an `error` message to that player only.
 4. **Play**: on start, the room calls `createGame` with the final roster and the
-   catalog map, and sends `matchStart` with the map and config once. (Once the editor adds
-   custom maps, M3, the room validates them with the same loader the editor and import
-   use.) A start that fails is reported to the owner as an `error` and the room stays in
+   catalog map, and sends `matchStart` with the map and config once. Every map, the catalog's included,
+   is validated by the map loader on the way in (§13, via `GameApi.start`); custom maps
+   from the editor (M3) will go through the same check. A start that fails is reported to the owner as an `error` and the room stays in
    the lobby; a player who disconnects while the match is starting is treated as having
    dropped from the match, not the lobby. **The roster is fixed from this moment.** Nobody joins a match in
    progress; a player who drops is marked disconnected (§10) rather than removed, so their
@@ -790,28 +790,39 @@ room codes are upper-cased and must be 5–6 characters, and unknown fields are 
 ```json
 {
   "version": 1,
-  "board": { "width": 40.0, "height": 40.0 },
+  "board": { "width": 40, "height": 40 },
   "obstacles": [
-    { "id": "o1", "type": "arch", "pos": { "x": 10.0, "y": 5.0 },
-      "footprint": { "w": 3.0, "d": 1.0 }, "doorWidth": 1.5, "doorHeight": 1.5, "axis": "y" }
+    { "id": "o1", "type": "arch", "pos": { "x": 10, "y": 5 },
+      "params": { "w": 3, "d": 1, "doorWidth": 1.5, "doorHeight": 1.5, "axis": "y" } },
+    { "id": "o2", "type": "donut", "pos": { "x": 20, "y": 12 },
+      "params": { "w": 5, "d": 1, "holeRadius": 1.6, "axis": "y" } },
+    { "id": "o3", "type": "cube", "pos": { "x": 8, "y": 30 }, "params": { "w": 4, "d": 1, "h": 0.6 } },
+    { "id": "o4", "type": "cone", "pos": { "x": 32, "y": 8 }, "params": { "radius": 2.5, "height": 3 } }
   ]
 }
 ```
 
-Both arch and donut carry their orientation as an `axis` authoring param (§7):
-
-```json
-{ "id": "o2", "type": "donut", "pos": { "x": 20.0, "y": 12.0 },
-  "footprint": { "w": 5.0, "d": 1.0 }, "holeRadius": 1.6, "axis": "y" }
-```
-
-Rules: only authoring params (`type`, `pos`, type-specific params) are stored; the real
-3D collider and render mesh are both derived from them on load (see Data model, §7).
+This is exactly the in-memory `MapDef` shape (`src/sim/types.ts`), so a map serializes as
+plain JSON. `w` × `d` is the footprint's x × y extent. Only authoring params are stored;
+the real 3D collider and render mesh are both derived from them on load (§6, §7).
 Default board is 40×40 units.
 
-`axis` (arch and donut) is optional and defaults to `"y"`, so maps authored before the
-field existed stay valid. The editor always writes it explicitly — a map that relies on
-the default is a map whose author never chose.
+**Loader and validator** (`parseMap` / `serializeMap`, `src/sim/mapFormat.ts`): the single
+entry point for every map — built-in, a saved preset, an imported file, one received by
+the server. `GameApi.start` runs every map through it, so no invalid map can reach a
+game. It treats input as untrusted:
+- `version` must be 1; unknown fields are dropped.
+- The board is 10–200 units on each side.
+- At most 200 obstacles, each with a unique `id` of 1–64 characters and a known `type`;
+  every size positive and finite, heights at most 20.
+- Every obstacle lies fully inside the board (cone: its base circle's bounding square).
+- A donut's `holeRadius` is less than the wheel's radius (half its across-axis extent),
+  or there is no rim left; an arch's `doorWidth` is less than its wall's length (its
+  across-axis extent).
+- `axis` (arch and donut) is `"x"` or `"y"`, optional, and defaults to `"y"`, so maps
+  authored before the field existed stay valid. `serializeMap` always writes it — the
+  editor never relies on the default.
+- A rejected map yields every problem found, each naming its obstacle.
 
 ## 14. Edge cases and error handling
 
@@ -903,6 +914,10 @@ the default is a map whose author never chose.
   (a real hollow shape), not a box or an undistorted-but-wrong torus
   (`obstacleMesh.test.ts`).
 - **Editor**: map round-trip (`save → export → import` ⇒ identical params).
+- **Map loader** (`mapFormat.test.ts`): built-in maps pass unchanged and round-trip;
+  `axis` defaults and unknown fields are dropped; every rule in §13 rejects what it
+  should, naming the obstacle and reporting all problems; `GameApi.start` refuses an
+  invalid map.
 - **Session** (`protocol.test.ts`, `roomLobby.test.ts`, `roomMatch.test.ts`): the
   client-message parser rejects anything malformed; the room's lobby rules (owner, unique
   skins, owner-only settings with limits, start gate, leaving and ownership transfer);
