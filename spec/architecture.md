@@ -74,7 +74,7 @@ flowchart LR
 
 | Component | Responsibility | Key files | Status |
 |---|---|---|---|
-| **Geometry** | The single conversion from an obstacle's authoring params (later also the player's shape) to 3D parts: box, cone, trimesh. Both physics and rendering consume this output, so what you see is what collides (§7, §11). | `src/geometry/obstacleGeometry.ts`, `donutMesh.ts`; `playerGeometry.ts` (M0) | built; player part M0 |
+| **Geometry** | The single conversion from an obstacle's authoring params, and from the player config, to 3D parts (box, cone, cylinder, trimesh; players convex only). Both physics and rendering consume this output, so what you see is what collides (§7, §11). | `src/geometry/obstacleGeometry.ts`, `donutMesh.ts`, `playerGeometry.ts` | built |
 | **PhysicsWorld** | A Rapier world used purely for collision queries: obstacle colliders built once per game, one kinematic body per player. Answers `moveDistance` (shape-cast sweep), `gunFits` (overlap), `raycastBullet`, `isFreeOfObstacles`. The one live, non-serializable part of `State`. | `src/physics/world.ts`, `obstacles.ts`, `rapier.ts` | built |
 | **Simulation (`sim`)** | Game rules. `createGame(RAPIER, config, map, roster, seed)` and `step(state, inputs, dt) → {state, events}`: movement, turning, shooting, deaths, rounds, match, spawns. Deterministic given the seed (§4). | `src/sim/{state,step,spawn,rng,types,snapshot}.ts` | built |
 | **Map loader** | The one entry point for every map (built-in, preset, import, received by the server): version check, defaults, hard constraints. | `src/sim/mapFormat.ts` | M0 |

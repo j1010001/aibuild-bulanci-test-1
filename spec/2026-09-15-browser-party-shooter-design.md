@@ -35,11 +35,10 @@ Canonical vocabulary used consistently throughout.
   direction are both directions.
 - **Facing** — a player's current direction; the gun fires along it. Set by the latest
   non-idle movement, random at spawn.
-- **Gun** — the barrel a player carries, pointing along `facing`: a segment from the edge
-  of the player's body (`R` from center) to the **muzzle** (`muzzleOffset` from center).
-  For collision it's a real 3D volume at the same height range as the body (§7, §8), not
-  a floor-level-only abstraction — it is blocked by, and blocks movement into, exactly
-  what the body would be.
+- **Gun** — the barrel a player carries, pointing along `facing`: a thin barrel from the
+  edge of the player's body (`R` from center) to the **muzzle** (`muzzleOffset` from
+  center), at bullet height. It collides exactly where it is drawn (§7): it is blocked by
+  walls and bodies that reach bullet height, and passes over anything lower.
 - **Bullet height (`H`)** — the fixed world height at which a bullet travels; a bullet is
   a point at this elevation, moving through real 3D space (§7).
 - **Player height** — the real collision height of a player's body (a cylinder, §7),
@@ -301,19 +300,30 @@ never moves after load).
   well-defined convex Minkowski difference on both sides. This is what makes the
   donut's real hole possible at all without approximation (see below): its collider is
   the literal mesh, not a decomposition of it.
+- **The player's shape comes from one definition**, `buildPlayerGeometry`
+  (`src/geometry/playerGeometry.ts`), consumed by both the physics world and the
+  renderer — the obstacle rule (§11) applied to players. It returns convex parts in the
+  player's local frame (ground-level origin, facing +Z): the body, drawn as a tomato in a
+  dress but in outline exactly one cylinder of radius `R` from the ground to
+  `playerHeight` (two stacked cylinders), and the gun, a thin box at bullet height from
+  `R` to `muzzleOffset`. Parts must be convex — players move, and a moving shape can only
+  be swept against the static donut trimesh if it is convex — so a future detailed model
+  becomes several convex pieces or a convex hull. Changing how a player looks and
+  collides means changing that one function.
 - **Player movement**: the player's real body — a cylinder of radius `R` and height
   `playerHeight`, resting on the ground — is shape-cast along the movement direction;
   the swept distance to first contact (against any obstacle or any other living
   player's body) clamps how far it actually moves this tick. Movement stays
   axis-aligned-only, so this never needs "slide along the wall" logic — a blocked axis
   just stops there, not deflects into an axis that was never being tried.
-- **Gun**: modeled as a second, thinner box collider spanning `R`..`muzzleOffset` along
-  `facing`, at the *same height range as the body* (spec's Terms: floor-level, like the
-  body) — not clipped to `bulletHeight`. It is shape-cast the same way, and movement
-  clamps at whichever of body-or-gun makes contact first — since `muzzleOffset > R`,
-  the gun normally leads. A moving player's gun is checked against every *other*
-  player's body (so nobody walks into someone's gun) — guns are never checked against
-  other guns.
+- **Gun**: the barrel part, turned to `facing`, is shape-cast alongside the body, and
+  movement clamps at whichever part makes contact first. Since `muzzleOffset > R`, the
+  gun leads wherever something stands at bullet height; over a wall lower than that, the
+  gun passes over and the body is what stops. A moving player's gun is checked against
+  every *other* player's body (so nobody walks into someone's gun) — guns are never
+  colliders, so they are never checked against other guns. (Until M0 task 2 the gun
+  collided as an invisible slab from the ground to `playerHeight` while being drawn as a
+  thin barrel — a visual/collision mismatch of exactly the kind §11 forbids.)
 - **Turning**: an instantaneous 90°/180° facing change re-checks only the gun (the body
   doesn't move) via an overlap test at the new orientation, not a sweep — if the gun's
   box would overlap any obstacle, any other player's body, or leave the board, the turn
@@ -459,21 +469,21 @@ replaced.
 - A direction change swings the gun with it instantly. If the gun would not fit in the
   new direction — overlapping an obstacle, another player's body, or leaving the board
   — the turn is refused for that tick: `facing` and position stay unchanged. This
-  applies equally to a 180° reversal. A player therefore cannot move toward a wall
-  closer than `muzzleOffset`, whether approaching head-on or turning toward it from
-  alongside.
+  applies equally to a 180° reversal. A player therefore cannot come closer than
+  `muzzleOffset` to anything that reaches bullet height, whether approaching head-on or
+  turning toward it from alongside; a wall lower than bullet height lets the gun pass
+  over it, so the body can come right up to it.
 
 ## 9. Shooting
 
 - On `shoot` edge, if `now − lastShotAt ≥ cadence`, spawn a `Bullet` at the muzzle
   (`muzzleOffset` from the player's center along `facing`) moving at `bulletSpeed` along
   `facing`.
-- The bullet's first-tick ray starts at the edge of the shooter's circle, not at the
-  muzzle, so an obstacle the gun overlaps at bullet height takes the shot (§7). The gun
-  can only overlap such geometry where it is not solid to the player's body — e.g. a low
-  slot's lintel, which sits above the gap's real doorHeight (§7) — and a shot fired
-  inside or into one is consumed by the lintel. The gun never overlaps another player's
-  body (§7), so no shot skips one.
+- The bullet's first-tick ray starts at the edge of the shooter's body, not at the
+  muzzle, so nothing between the body and the muzzle can be skipped. Since the gun is
+  the barrel at bullet height and movement and turning never let it overlap anything at
+  that height (§7, §8), that stretch is always clear of obstacles and other players'
+  bodies.
 - **Players are not immune to their own bullets.** The bullet-vs-player test applies to
   every living player, the shooter included — the collision query itself has no
   `ownerId` branch (§7); a bullet's own path is nudged forward by a tiny epsilon purely
@@ -581,10 +591,11 @@ replaced.
   eliminate, reintroduced by hand in the one place a role-based special case survived.
 - Scene built from each snapshot: ground plane sized to board bounds; one mesh per
   obstacle from its primitive type (box / cone / box-with-cutout for arch / washer for
-  donut); players = tomato sphere + skirt cone tinted by `skinId` sized to
-  `playerHeight`, plus a gun barrel along `facing` at height `H` reaching `muzzleOffset`
-  from center, so bullets visibly leave it; bullets = small sphere explicitly floating
-  at bullet height `H` so the tilt makes hole-crossing visually true.
+  donut); players drawn part for part from `buildPlayerGeometry` (§7): the body's upper
+  part tinted by `skinId`, the lower part as the dress, and the gun barrel along
+  `facing` at height `H`, so bullets visibly leave it; bullets = thin tracers whose tip is
+  the bullet's point position at height `H` (a bullet collides as a point), with a short
+  streak trailing along the path, so the tilt makes hole-crossing visually true.
 - Fixed lighting; subtle floor grid/hint for spatial reading. No post-processing in v1.
 - **HUD** (DOM overlay, derived from the ClientView by `src/client/hud.ts`): round number
   and a countdown from `roundTime`; each player's color, name ("you" marked) and score,
@@ -873,6 +884,13 @@ the default is a map whose author never chose.
   can't be replayed is rejected and an out-of-range one is recorded as the value used;
   `GameApi` picks a fresh seed per unseeded start, records it, and a run replays exactly
   from it.
+- **Player shape** (`playerGeometry.test.ts`, `physicsWorld.test.ts`): only convex parts;
+  the body is exactly one cylinder from the ground to `playerHeight`; the gun is a thin
+  barrel at bullet height from `R` to `muzzleOffset`; the shape follows the config;
+  `buildPlayerMesh` draws exactly those parts. In physics: the gun passes over a low wall
+  (the body stops), a turn toward a wall closer than the muzzle is allowed over a low
+  wall and refused into a tall one, the gun is still blocked by other bodies, and a
+  disabled player is inert in every part.
 - **Rendering/collision fidelity** (pure, unit-tested despite being about rendering,
   because it's the correctness property behind §11's "built from the same function as
   the collider" rule, not a look-and-feel one — three.js geometry objects are

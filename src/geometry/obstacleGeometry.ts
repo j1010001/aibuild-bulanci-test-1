@@ -27,9 +27,11 @@ export type BoxSpec = {
   role?: 'pillar' | 'lintel';
 };
 export type ConeSpec = { kind: 'cone'; radius: number; height: number; center: Vec3 };
+/** A vertical cylinder (the player's body; available to obstacles too). */
+export type CylinderSpec = { kind: 'cylinder'; radius: number; height: number; center: Vec3 };
 export type TrimeshSpec = { kind: 'trimesh'; geometry: THREE.BufferGeometry; center: Vec3; rotationY: number; rotationX: number };
 
-export type PartSpec = BoxSpec | ConeSpec | TrimeshSpec;
+export type PartSpec = BoxSpec | ConeSpec | CylinderSpec | TrimeshSpec;
 
 /** An obstacle's full geometry: one or more parts (e.g. an arch's two pillars + lintel). */
 export type ObstacleGeometry = { parts: PartSpec[] };

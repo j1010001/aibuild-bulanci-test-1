@@ -9,6 +9,7 @@
 import * as THREE from 'three';
 import { AZIMUTH, computeCameraBasis, POLAR_FROM_VERTICAL } from './camera';
 import { buildObstacleGeometry } from './geometry/obstacleGeometry';
+import { buildPlayerGeometry, type PlayerShapeConfig } from './geometry/playerGeometry';
 import type { BoxSpec, ConeSpec, PartSpec, TrimeshSpec } from './geometry/obstacleGeometry';
 import type { RenderState } from './client/model';
 import type { CubeParams, DonutParams, ObstacleDef, Player } from './sim';
@@ -18,9 +19,14 @@ const VFOV_DEG = 45;
 const SOLID_COLOR = 0x8a6d3b; // solid to bullets (or: always solid, for plain terrain)
 const POROUS_COLOR = 0x5a7a8a; // bullets pass over/through (low wall, blocked-looking variants)
 
-// One geometry + material shared by every bullet: bullets come and go many times a second.
-const BULLET_GEOMETRY = new THREE.SphereGeometry(0.15, 12, 12);
-const BULLET_MATERIAL = new THREE.MeshStandardMaterial({ color: 0xfff3b0, emissive: 0x554400 });
+// A bullet collides as a point (a ray at bullet height), so it is drawn as a thin tracer:
+// its tip is the bullet's position and a short streak trails behind along its path.
+// One geometry + material is shared by every bullet (they come and go many times a second).
+const TRACER_LENGTH = 0.6;
+const BULLET_GEOMETRY = new THREE.BoxGeometry(0.04, 0.04, TRACER_LENGTH).translate(0, 0, -TRACER_LENGTH / 2);
+const BULLET_MATERIAL = new THREE.MeshBasicMaterial({ color: 0xfff3b0 });
+const DRESS_COLOR = 0x2f7a3d;
+const GUN_COLOR = 0x333333;
 
 /** Frees the GPU buffers of everything under `root` (removing from the scene alone does not). */
 function disposeTree(root: THREE.Object3D): void {
@@ -161,16 +167,14 @@ export class Renderer {
       seen.add(p.id);
       let group = this.playerGroups.get(p.id);
       if (!group) {
-        group = buildPlayerGroup(state.config.muzzleOffset, state.config.playerRadius, state.config.playerHeight, state.config.bulletHeight);
+        group = buildPlayerMesh(state.config);
         this.playerGroups.set(p.id, group);
         this.scene.add(group);
       }
       group.visible = p.alive && p.connected;
       group.position.set(p.pos.x, 0, p.pos.y);
       group.rotation.y = facingAngle(p.facing);
-      const body = group.userData.body as THREE.Mesh;
-      const mat = body.material as THREE.MeshStandardMaterial;
-      mat.color.set(p.skinId);
+      (group.userData.skin as THREE.MeshStandardMaterial).color.set(p.skinId);
     }
     for (const [id, group] of this.playerGroups) {
       if (!seen.has(id)) {
@@ -192,6 +196,7 @@ export class Renderer {
         this.scene.add(mesh);
       }
       mesh.position.set(b.pos.x, state.config.bulletHeight, b.pos.y);
+      mesh.rotation.y = facingAngle(b.dir); // the streak trails behind the tip, along the path
     }
     for (const [id, mesh] of this.bulletMeshes) {
       if (!seen.has(id)) {
@@ -202,35 +207,19 @@ export class Renderer {
   }
 }
 
-function buildPlayerGroup(muzzleOffset: number, playerRadius: number, playerHeight: number, bulletHeight: number): THREE.Group {
+/** Exported for testing: the player drawn from exactly the parts the physics world
+ * collides with (buildPlayerGeometry), in the player's local frame facing +Z. */
+export function buildPlayerMesh(config: PlayerShapeConfig): THREE.Group {
   const group = new THREE.Group();
-
-  // A tomato-ish body approximating the real collision cylinder's height, not an
-  // independently-chosen size — see spec §11's rendering-fidelity rule.
-  const bodyRadius = Math.min(playerRadius * 0.9, playerHeight * 0.45);
-  const body = new THREE.Mesh(
-    new THREE.SphereGeometry(bodyRadius, 20, 16),
-    new THREE.MeshStandardMaterial({ color: 0xffffff }),
-  );
-  body.position.y = playerHeight - bodyRadius;
-  group.add(body);
-  group.userData.body = body;
-
-  const skirt = new THREE.Mesh(
-    new THREE.ConeGeometry(playerRadius, Math.max(0.1, playerHeight - bodyRadius), 16),
-    new THREE.MeshStandardMaterial({ color: 0x2f7a3d }),
-  );
-  skirt.position.y = (playerHeight - bodyRadius) / 2;
-  group.add(skirt);
-
-  const gunLength = Math.max(0.05, muzzleOffset - playerRadius);
-  const gun = new THREE.Mesh(
-    new THREE.BoxGeometry(0.08, 0.08, gunLength),
-    new THREE.MeshStandardMaterial({ color: 0x333333 }),
-  );
-  gun.position.set(0, Math.min(bulletHeight, playerHeight * 0.9), playerRadius + gunLength / 2);
-  group.add(gun);
-
+  const skin = new THREE.MeshStandardMaterial({ color: 0xffffff }); // tinted per player each frame
+  const materials = {
+    skin,
+    dress: new THREE.MeshStandardMaterial({ color: DRESS_COLOR }),
+    gun: new THREE.MeshStandardMaterial({ color: GUN_COLOR }),
+  };
+  const g = buildPlayerGeometry(config);
+  for (const { part, role } of [...g.body, ...g.gun]) group.add(meshFromPart(part, materials[role]));
+  group.userData.skin = skin;
   return group;
 }
 
@@ -240,7 +229,9 @@ function meshFromPart(part: PartSpec, material: THREE.Material): THREE.Mesh {
       ? new THREE.BoxGeometry(part.width, part.height, part.depth)
       : part.kind === 'cone'
         ? new THREE.ConeGeometry(part.radius, part.height, 24)
-        : part.geometry;
+        : part.kind === 'cylinder'
+          ? new THREE.CylinderGeometry(part.radius, part.radius, part.height, 24)
+          : part.geometry;
   const mesh = new THREE.Mesh(geometry, material);
   mesh.position.set(part.center.x, part.center.y, part.center.z);
   if (part.kind === 'trimesh') {

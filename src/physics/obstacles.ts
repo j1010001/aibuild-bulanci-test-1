@@ -30,13 +30,17 @@ export function addObstacleToWorld(RAPIER: Rapier, world: World, geometry: Obsta
   }
 }
 
-function buildColliderDesc(RAPIER: Rapier, part: PartSpec): ColliderDesc {
+export function buildColliderDesc(RAPIER: Rapier, part: PartSpec): ColliderDesc {
   if (part.kind === 'box') {
     return RAPIER.ColliderDesc.cuboid(part.width / 2, part.height / 2, part.depth / 2)
       .setTranslation(part.center.x, part.center.y, part.center.z);
   }
   if (part.kind === 'cone') {
     return RAPIER.ColliderDesc.cone(part.height / 2, part.radius)
+      .setTranslation(part.center.x, part.center.y, part.center.z);
+  }
+  if (part.kind === 'cylinder') {
+    return RAPIER.ColliderDesc.cylinder(part.height / 2, part.radius)
       .setTranslation(part.center.x, part.center.y, part.center.z);
   }
   // trimesh (donut)

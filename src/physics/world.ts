@@ -8,9 +8,10 @@
 // not a physical simulation of falling bodies; Rapier is used here purely for its
 // robust convex/trimesh collision queries (shape-casting, ray-casting), not dynamics.
 
-import type { Collider, Cuboid, RigidBody, World } from '@dimforge/rapier3d-compat';
+import type { Collider, RigidBody, Shape, World } from '@dimforge/rapier3d-compat';
 import { buildObstacleGeometry } from '../geometry/obstacleGeometry';
-import { addObstacleToWorld, groupsBitmask, OBSTACLE_COLLISION_GROUP, PLAYER_COLLISION_GROUP } from './obstacles';
+import { buildPlayerGeometry, type ConvexPart, type PlayerGeometry, type PlayerShapeConfig } from '../geometry/playerGeometry';
+import { addObstacleToWorld, buildColliderDesc, groupsBitmask, OBSTACLE_COLLISION_GROUP, PLAYER_COLLISION_GROUP } from './obstacles';
 import type { Rapier } from './rapier';
 import type { Direction, MapDef, PlayerId, Vec2 } from '../sim/types';
 import { DIR_VECTOR } from '../sim/types';
@@ -18,9 +19,27 @@ import { DIR_VECTOR } from '../sim/types';
 const IDENTITY_ROTATION = { x: 0, y: 0, z: 0, w: 1 };
 const SKIN = 0.001; // small safety margin so a shapecast's "safe" advance never ends in exact contact
 
-function dirToVelocity(dir: Direction): { x: number; y: number; z: number } {
+type Vec3 = { x: number; y: number; z: number };
+
+function dirToVelocity(dir: Direction): Vec3 {
   const v = DIR_VECTOR[dir];
   return { x: v.x, y: 0, z: v.y };
+}
+
+/**
+ * A player part turned to face `dir`, as an offset from the player's ground position plus
+ * a world-axis-aligned shape. Local +Z (forward) becomes the facing, local +X its right-hand
+ * side; box extents swap accordingly. Cylinders and cones are vertical, so they don't change.
+ */
+function orient(part: ConvexPart, dir: Direction): { offset: Vec3; part: ConvexPart } {
+  const f = DIR_VECTOR[dir]; // forward, in world (x, z)
+  const r = { x: f.y, y: -f.x }; // right-hand side
+  const c = part.center;
+  const offset = { x: c.x * r.x + c.z * f.x, y: c.y, z: c.x * r.y + c.z * f.y };
+  if (part.kind !== 'box') return { offset, part };
+  const width = Math.abs(r.x) * part.width + Math.abs(f.x) * part.depth;
+  const depth = Math.abs(r.y) * part.width + Math.abs(f.y) * part.depth;
+  return { offset, part: { ...part, width, depth } };
 }
 
 export type BulletHit = { distance: number; hitPlayerId: PlayerId | null };
@@ -28,18 +47,17 @@ export type BulletHit = { distance: number; hitPlayerId: PlayerId | null };
 export class PhysicsWorld {
   private readonly RAPIER: Rapier;
   private readonly world: World;
+  private readonly shape: PlayerGeometry;
   private readonly playerBodies = new Map<PlayerId, RigidBody>();
-  private readonly playerColliders = new Map<PlayerId, Collider>();
+  private readonly playerColliders = new Map<PlayerId, Collider[]>();
   private readonly colliderOwner = new Map<number, PlayerId>(); // collider handle -> player id
-  readonly playerRadius: number;
-  readonly playerHeight: number;
   readonly board: { width: number; height: number };
 
-  constructor(RAPIER: Rapier, map: MapDef, opts: { playerRadius: number; playerHeight: number }) {
+  /** `player` is the player shape config; the shape itself comes from buildPlayerGeometry. */
+  constructor(RAPIER: Rapier, map: MapDef, player: PlayerShapeConfig) {
     this.RAPIER = RAPIER;
     this.world = new RAPIER.World({ x: 0, y: 0, z: 0 });
-    this.playerRadius = opts.playerRadius;
-    this.playerHeight = opts.playerHeight;
+    this.shape = buildPlayerGeometry(player);
     this.board = { ...map.board };
 
     for (const def of map.obstacles) {
@@ -50,26 +68,23 @@ export class PhysicsWorld {
   }
 
   addPlayer(id: PlayerId, pos: Vec2): void {
-    const body = this.world.createRigidBody(
-      this.RAPIER.RigidBodyDesc.kinematicPositionBased().setTranslation(pos.x, this.playerHeight / 2, pos.y),
-    );
-    const collider = this.world.createCollider(
-      this.RAPIER.ColliderDesc.cylinder(this.playerHeight / 2, this.playerRadius).setCollisionGroups(
-        groupsBitmask(PLAYER_COLLISION_GROUP, 0xffff),
-      ),
-      body,
+    // The body's origin is the player's footprint center on the ground; each body part is
+    // a collider at its local offset. The gun is not a collider (other bodies don't collide
+    // with it); it is swept and tested explicitly (moveDistance, gunFits).
+    const body = this.world.createRigidBody(this.RAPIER.RigidBodyDesc.kinematicPositionBased().setTranslation(pos.x, 0, pos.y));
+    const colliders = this.shape.body.map(({ part }) =>
+      this.world.createCollider(buildColliderDesc(this.RAPIER, part).setCollisionGroups(groupsBitmask(PLAYER_COLLISION_GROUP, 0xffff)), body),
     );
     this.playerBodies.set(id, body);
-    this.playerColliders.set(id, collider);
-    this.colliderOwner.set(collider.handle, id);
+    this.playerColliders.set(id, colliders);
+    for (const c of colliders) this.colliderOwner.set(c.handle, id);
     this.world.step();
   }
 
   removePlayer(id: PlayerId): void {
     const body = this.playerBodies.get(id);
     if (!body) return;
-    const collider = this.playerColliders.get(id);
-    if (collider) this.colliderOwner.delete(collider.handle);
+    for (const c of this.playerColliders.get(id) ?? []) this.colliderOwner.delete(c.handle);
     this.world.removeRigidBody(body);
     this.playerBodies.delete(id);
     this.playerColliders.delete(id);
@@ -78,14 +93,14 @@ export class PhysicsWorld {
   /** Dead or disconnected players are inert (spec §10) — excluded from every query
    * (movement blocking, gun-fit, bullet hits) without removing their body/state. */
   setPlayerEnabled(id: PlayerId, enabled: boolean): void {
-    const collider = this.playerColliders.get(id);
-    if (collider) collider.setEnabled(enabled);
+    for (const c of this.playerColliders.get(id) ?? []) c.setEnabled(enabled);
+    this.world.step(); // queries only see the change once the query pipeline is updated
   }
 
   setPlayerPosition(id: PlayerId, pos: Vec2): void {
     const body = this.playerBodies.get(id);
     if (!body) return;
-    body.setTranslation({ x: pos.x, y: this.playerHeight / 2, z: pos.y }, true);
+    body.setTranslation({ x: pos.x, y: 0, z: pos.y }, true);
     this.world.step();
   }
 
@@ -97,42 +112,24 @@ export class PhysicsWorld {
   }
 
   /**
-   * Sweeps the player's real cylinder AND its leading gun (spec §7: "the gun always
-   * leads... movement clamps at the first contact of either the circle or the muzzle")
-   * along `dir`; returns the distance actually clear to travel (0..distance).
+   * Sweeps every part of the player — body and the gun, facing `dir` — along `dir` and
+   * returns the distance clear to travel (0..distance): movement clamps at the first
+   * contact of any part (spec §7). Since the muzzle reaches past the body, the gun leads
+   * wherever something stands at gun height; over a low wall, the body is what stops.
    */
-  moveDistance(id: PlayerId, dir: Direction, distance: number, muzzleOffset: number): number {
+  moveDistance(id: PlayerId, dir: Direction, distance: number): number {
     if (distance <= 0) return 0;
-    const body = this.playerBodies.get(id);
-    const collider = this.playerColliders.get(id);
-    if (!body || !collider) throw new Error(`PhysicsWorld: unknown player ${id}`);
+    const body = this.requireBody(id);
     const pos = body.translation();
     const vel = dirToVelocity(dir);
-
-    const bodyShape = new this.RAPIER.Cylinder(this.playerHeight / 2, this.playerRadius);
-    const bodyHit = this.world.castShape(pos, IDENTITY_ROTATION, vel, bodyShape, 0, distance, true, undefined, undefined, collider);
-    const bodyAdvance = bodyHit ? Math.max(0, bodyHit.time_of_impact - SKIN) : distance;
-
-    const { shape: gunShape, center: gunCenter } = this.gunShapeAndCenter({ x: pos.x, y: pos.z }, dir, muzzleOffset);
-    const gunHit = this.world.castShape(gunCenter, IDENTITY_ROTATION, vel, gunShape, 0, distance, true, undefined, undefined, collider);
-    const gunAdvance = gunHit ? Math.max(0, gunHit.time_of_impact - SKIN) : distance;
-
-    return Math.min(bodyAdvance, gunAdvance);
-  }
-
-  /** The gun as a thin box spanning playerRadius..muzzleOffset along `dir`, at the same
-   * height range as the body (spec §7: "treated as floor-level, like the body"). Shared
-   * by moveDistance (the gun leads the body when moving) and gunFits (turning). */
-  private gunShapeAndCenter(pos: Vec2, dir: Direction, muzzleOffset: number): { shape: Cuboid; center: { x: number; y: number; z: number } } {
-    const v = DIR_VECTOR[dir];
-    const mid = (this.playerRadius + muzzleOffset) / 2;
-    const halfLen = (muzzleOffset - this.playerRadius) / 2;
-    const center = { x: pos.x + v.x * mid, y: this.playerHeight / 2, z: pos.y + v.y * mid };
-    const shape =
-      dir === '+X' || dir === '-X'
-        ? new this.RAPIER.Cuboid(halfLen, this.playerHeight / 2, 0.05)
-        : new this.RAPIER.Cuboid(0.05, this.playerHeight / 2, halfLen);
-    return { shape, center };
+    let advance = distance;
+    for (const { part } of [...this.shape.body, ...this.shape.gun]) {
+      const o = orient(part, dir);
+      const center = { x: pos.x + o.offset.x, y: o.offset.y, z: pos.z + o.offset.z };
+      const hit = this.world.castShape(center, IDENTITY_ROTATION, vel, this.rapierShape(o.part), 0, distance, true, undefined, undefined, undefined, body);
+      if (hit) advance = Math.min(advance, Math.max(0, hit.time_of_impact - SKIN));
+    }
+    return advance;
   }
 
   /** Applies a movement of `distance` along `dir` (caller has already clamped it via moveDistance). */
@@ -147,17 +144,17 @@ export class PhysicsWorld {
   }
 
   /**
-   * Would the gun fit facing `dir` from `pos`? Modeled as a thin box spanning
-   * playerRadius..muzzleOffset along `dir`, at the SAME height range as the body (spec
-   * §7: "the gun is part of the player's body for collision... treated as floor-level"),
-   * so it is blocked by exactly the same real geometry the body is, excluding the
-   * player's own collider and board bounds (checked separately by the caller).
+   * Would the player fit facing `dir` at `pos` — i.e. does the gun, turned that way, overlap
+   * nothing (any obstacle or another player's body)? The player's own colliders are
+   * excluded; board bounds are checked separately by the caller.
    */
-  gunFits(id: PlayerId, pos: Vec2, dir: Direction, muzzleOffset: number): boolean {
-    const collider = this.playerColliders.get(id);
-    const { shape, center } = this.gunShapeAndCenter(pos, dir, muzzleOffset);
-    const hit = this.world.intersectionWithShape(center, IDENTITY_ROTATION, shape, undefined, undefined, collider);
-    return hit === null;
+  gunFits(id: PlayerId, pos: Vec2, dir: Direction): boolean {
+    const body = this.playerBodies.get(id);
+    return this.shape.gun.every(({ part }) => {
+      const o = orient(part, dir);
+      const center = { x: pos.x + o.offset.x, y: o.offset.y, z: pos.y + o.offset.z };
+      return this.world.intersectionWithShape(center, IDENTITY_ROTATION, this.rapierShape(o.part), undefined, undefined, undefined, body) === null;
+    });
   }
 
   /**
@@ -182,18 +179,27 @@ export class PhysicsWorld {
     return { distance: hit.timeOfImpact + SKIN, hitPlayerId };
   }
 
-  /** Is a player-sized circle at `pos` free of every obstacle (used for spawn placement)? */
+  /** Is a player's body at `pos` clear of every obstacle (used for spawn placement)? */
   isFreeOfObstacles(pos: Vec2): boolean {
-    const shape = new this.RAPIER.Cylinder(this.playerHeight / 2, this.playerRadius);
-    const center = { x: pos.x, y: this.playerHeight / 2, z: pos.y };
-    const hit = this.world.intersectionWithShape(
-      center,
-      IDENTITY_ROTATION,
-      shape,
-      undefined,
-      groupsBitmask(0xffff, OBSTACLE_COLLISION_GROUP),
-    );
-    return hit === null;
+    return this.shape.body.every(({ part }) => {
+      const o = orient(part, '+Y');
+      const center = { x: pos.x + o.offset.x, y: o.offset.y, z: pos.y + o.offset.z };
+      return (
+        this.world.intersectionWithShape(center, IDENTITY_ROTATION, this.rapierShape(o.part), undefined, groupsBitmask(0xffff, OBSTACLE_COLLISION_GROUP)) === null
+      );
+    });
+  }
+
+  private requireBody(id: PlayerId): RigidBody {
+    const body = this.playerBodies.get(id);
+    if (!body) throw new Error(`PhysicsWorld: unknown player ${id}`);
+    return body;
+  }
+
+  private rapierShape(part: ConvexPart): Shape {
+    if (part.kind === 'box') return new this.RAPIER.Cuboid(part.width / 2, part.height / 2, part.depth / 2);
+    if (part.kind === 'cylinder') return new this.RAPIER.Cylinder(part.height / 2, part.radius);
+    return new this.RAPIER.Cone(part.height / 2, part.radius);
   }
 
   dispose(): void {

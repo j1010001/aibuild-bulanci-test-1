@@ -49,7 +49,12 @@ export function createGame(
     board: { ...DEFAULT_CONFIG.board, ...(configOverrides.board ?? map.board) },
   };
 
-  const physics = new PhysicsWorld(RAPIER, map, { playerRadius: config.playerRadius, playerHeight: config.playerHeight });
+  const physics = new PhysicsWorld(RAPIER, map, {
+    playerRadius: config.playerRadius,
+    playerHeight: config.playerHeight,
+    muzzleOffset: config.muzzleOffset,
+    bulletHeight: config.bulletHeight,
+  });
 
   const players: Player[] = roster.map((r) => ({
     id: r.id,

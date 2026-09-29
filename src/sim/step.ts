@@ -58,7 +58,7 @@ function resolvePlayerMovement(state: State, player: State['players'][number], m
 
   if (moveDir !== player.facing) {
     const fits = muzzleWithinBoard(player.pos, moveDir, state.config.muzzleOffset, state.config.board) &&
-      physics.gunFits(player.id, player.pos, moveDir, state.config.muzzleOffset);
+      physics.gunFits(player.id, player.pos, moveDir);
     if (!fits) {
       events.push({ kind: 'turnRefused', playerId: player.id, attemptedFacing: moveDir });
       return;
@@ -67,7 +67,7 @@ function resolvePlayerMovement(state: State, player: State['players'][number], m
   }
 
   const distance = state.config.playerSpeed * dt;
-  let advance = physics.moveDistance(player.id, moveDir, distance, state.config.muzzleOffset);
+  let advance = physics.moveDistance(player.id, moveDir, distance);
   advance = Math.min(advance, boardClampAdvance(player.pos, moveDir, distance, state.config.playerRadius, state.config.board));
   const muzzleStart = muzzlePoint(player.pos, moveDir, state.config.muzzleOffset);
   advance = Math.min(advance, boardClampAdvance(muzzleStart, moveDir, distance, 0, state.config.board));

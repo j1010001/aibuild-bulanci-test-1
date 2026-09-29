@@ -41,7 +41,7 @@ function muzzleWithinBoard(pos: Vec2, dir: Direction, muzzleOffset: number, boar
 function pickValidFacing(state: State, playerId: PlayerId, pos: Vec2): Direction | null {
   for (const dir of shuffledDirections(state)) {
     if (!muzzleWithinBoard(pos, dir, state.config.muzzleOffset, state.config.board)) continue;
-    if (state.physics.gunFits(playerId, pos, dir, state.config.muzzleOffset)) return dir;
+    if (state.physics.gunFits(playerId, pos, dir)) return dir;
   }
   return null;
 }
