@@ -28,7 +28,7 @@ function isAxisAligned(a: Vec2, b: Vec2): boolean {
 describe('NavGrid: where a player fits', () => {
   it('on an open map, a path is a straight run to the goal', () => {
     const grid = NavGrid.build(mapOf([]), CONFIG);
-    const path = grid.findPath({ x: 5, y: 5 }, { x: 30, y: 5 })!;
+    const path = grid.findPath({ x: 5.25, y: 5.25 }, { x: 30, y: 5 })!; // from a cell center: no leg onto the grid
     expect(path).toHaveLength(1);
     expect(Math.abs(path[0]!.x - 30)).toBeLessThanOrEqual(0.5);
     expect(Math.abs(path[0]!.y - 5)).toBeLessThanOrEqual(0.5);
@@ -40,7 +40,7 @@ describe('NavGrid: where a player fits', () => {
     const path = grid.findPath({ x: 10, y: 10 }, { x: 10, y: 30 })!;
     expect(path).not.toBeNull();
     expect(path.some((p) => p.x > 30.5)).toBe(true); // goes round the open east end
-    let prev = grid.snapToPath({ x: 10, y: 10 });
+    let prev = { x: 10, y: 10 }; // paths start from the actual position
     for (const p of path) {
       expect(isAxisAligned(prev, p)).toBe(true);
       prev = p;

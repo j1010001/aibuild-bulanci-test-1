@@ -64,8 +64,9 @@ describe('BotBrain: attack', () => {
   it('lined up across a wall: does not fire, and heads around the wall instead of into it', () => {
     const brain = brainFor({ ...DIFFICULTY.hard, reactionMs: [0, 0] }, WALLED);
     // On a grid-cell center, so the first move is the route itself (off-center, the bot
-    // first steps onto its path's line).
-    const s = state([player('a', { x: 20.25, y: 10.25 }, '+Y'), player('b', { x: 20.25, y: 30.25 })]);
+    // first steps onto its path's line). Facing along the wall: facing it, walking up to
+    // the wall first and then round is an equally cheap route.
+    const s = state([player('a', { x: 20.25, y: 10.25 }, '+X'), player('b', { x: 20.25, y: 30.25 })]);
     for (let t = 0; t <= 500; t += 50) expect(brain.decide(s, 'a', t).shoot).toBe(false);
     const first = brain.decide(s, 'a', 600).moveDir;
     expect(first === '+X' || first === '-X').toBe(true); // around an end of the wall, not straight into it
