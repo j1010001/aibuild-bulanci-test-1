@@ -7,7 +7,7 @@ import { beforeAll, describe, expect, it } from 'vitest';
 import { LocalMatchSession, type LocalMatchOptions } from '../../src/client/localMatchSession';
 import { ensureRapierReady } from '../../src/physics/rapier';
 import { BUILT_IN_MAPS } from '../../src/session/maps';
-import type { ServerMessage } from '../../src/session/protocol';
+import { CONFIG_LIMITS, type ServerMessage } from '../../src/session/protocol';
 
 beforeAll(async () => {
   await ensureRapierReady();
@@ -74,6 +74,14 @@ describe('LocalMatchSession: setup', () => {
   it('refuses an unknown map', () => {
     expect(() => new LocalMatchSession({ bots: 1, difficulty: 'normal', mapId: 'nope' })).toThrow();
   });
+
+  it('refuses settings outside the room limits up front (instead of silently playing the defaults)', () => {
+    for (const bad of [{ targetScore: 0 }, { targetScore: 2.5 }, { roundTime: 9999 }, { roundTime: CONFIG_LIMITS.roundTime.min - 1 }]) {
+      expect(() => new LocalMatchSession({ bots: 1, difficulty: 'normal', ...bad })).toThrow(RangeError);
+    }
+    const ok = { targetScore: CONFIG_LIMITS.targetScore.max, roundTime: CONFIG_LIMITS.roundTime.min };
+    expect(() => new LocalMatchSession({ bots: 1, difficulty: 'normal', ...ok }).close()).not.toThrow();
+  });
 });
 
 describe('LocalMatchSession: playing', () => {
@@ -83,12 +91,18 @@ describe('LocalMatchSession: playing', () => {
     const me = myId(got);
     const before = lastSnapshot(got)!.state.players.find((p) => p.id === me)!.pos;
     // Each direction for a second (outlasting any round-start countdown); some way is open.
+    // Only movement counts: the same round throughout, and the human alive (a respawn would
+    // also move it).
+    const round = lastSnapshot(got)!.state.roundNumber;
     let farthest = 0;
     for (const [seq, dir] of (['+X', '-X', '+Y', '-Y'] as const).entries()) {
       await session.send({ type: 'input', seq, moveDir: dir, shoot: false });
       for (let t = 0; t < 60; t++) session.tick(DT);
-      const at = lastSnapshot(got)!.state.players.find((p) => p.id === me)!.pos;
-      farthest = Math.max(farthest, Math.hypot(at.x - before.x, at.y - before.y));
+      const s = lastSnapshot(got)!.state;
+      const mine = s.players.find((p) => p.id === me)!;
+      expect(s.roundNumber).toBe(round);
+      expect(mine.alive).toBe(true);
+      farthest = Math.max(farthest, Math.hypot(mine.pos.x - before.x, mine.pos.y - before.y));
     }
     expect(farthest).toBeGreaterThan(0.5);
     session.close();
@@ -121,6 +135,30 @@ describe('LocalMatchSession: playing', () => {
     };
     expect(await outcome()).toEqual(await outcome());
   }, 60_000);
+
+  it('…and a different seed gives a different match (the seed reaches the bots, not just the spawns)', async () => {
+    const outcome = async (seed: number) => {
+      const { session } = open({ bots: 2, difficulty: 'normal', seed });
+      const draws = session.bots.map((b) => [b.nextReactionMs(), b.nextReactionMs()]);
+      session.close();
+      return draws;
+    };
+    expect(await outcome(5)).toEqual(await outcome(5));
+    expect(await outcome(5)).not.toEqual(await outcome(6));
+  });
+
+  it('playAgain() during a match does nothing: the match still ends on its results, with no restart behind it', async () => {
+    const { session, got } = open({ bots: 3, difficulty: 'hard', targetScore: 1, seed: 4 });
+    await runUntil(session, () => matchStarts(got).length > 0, 5);
+    session.playAgain(); // mid-match: ignored
+    await runUntil(session, () => lastSnapshot(got)?.state.phase === 'matchEnd', 600);
+    for (let t = 0; t < 3 * 60; t++) {
+      await settle();
+      session.tick(DT);
+    }
+    expect(matchStarts(got)).toHaveLength(1);
+    session.close();
+  });
 
   it('close() ends everything: the match stops, onClose fires once, and further ticks are harmless', async () => {
     const { session, got } = open({ bots: 2, difficulty: 'normal', seed: 6 });
