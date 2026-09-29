@@ -7,12 +7,12 @@ Status: approved. The design authority is still `spec/2026-09-15-browser-party-s
 
 | Milestone | State |
 |---|---|
-| M0 | Task 1 (seeded RNG) done. Tasks 2–4 (player shape from one definition, map loader, spec cleanup) still open. |
+| M0 | Done: seeded RNG; player shape from one definition (gun collides where drawn, and is solid to other bodies); map loader and validator (every map enters a game through it); spec cleanup, with rooms capped at 8 players (operator decision). |
 | M1 | Done: shared `Room` + protocol (`src/session`), client view model, practice via `LocalSession`, screens and HUD. |
 | M2 | Done: authoritative server (`server/`), `NetSession` + interpolation + rejoin in the browser, headless bots + `npm run bot`, two-browser Playwright smoke test. |
 | M3, M4 | Not started. |
 
-Deviation from the plan: until M0 task 3 (map loader) and M3 (editor) exist, a room's map is chosen **by id from a built-in catalog** (`src/session/maps.ts`), so no client-supplied map data reaches the server. The loader will validate custom maps when they arrive.
+Deviation from the plan: until M3 (editor) exists, a room's map is chosen **by id from a built-in catalog** (`src/session/maps.ts`), so no client-supplied map data reaches the server. Every map, catalog maps included, already passes through the map loader in `GameApi.start`; custom maps will too.
 
 ## Context
 
