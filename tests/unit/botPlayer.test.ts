@@ -83,6 +83,23 @@ describe('BotPlayer', () => {
     expect(Math.max(...Object.values(a.view.result!.scores))).toBe(2);
   });
 
+  // Regression: identical bots fired on the same tick and traded kills forever (every
+  // round a draw). A per-bot reaction delay, drawn from a seeded generator, breaks the tie.
+  it('draws its reaction delays from its own seeded generator: reproducible, within range', () => {
+    const bot = (seed: number) =>
+      new BotPlayer(new InProcessSession(new Room({ code: 'ZZZZZ' }), { kind: 'create' }, 'X'), { seed, reactionMs: [100, 300] });
+    const a = bot(1);
+    const b = bot(1);
+    const c = bot(2);
+    const seqA = [a.nextReactionMs(), a.nextReactionMs(), a.nextReactionMs()];
+    expect([b.nextReactionMs(), b.nextReactionMs(), b.nextReactionMs()]).toEqual(seqA);
+    expect([c.nextReactionMs(), c.nextReactionMs(), c.nextReactionMs()]).not.toEqual(seqA);
+    for (const d of seqA) {
+      expect(d).toBeGreaterThanOrEqual(100);
+      expect(d).toBeLessThanOrEqual(300);
+    }
+  });
+
   it('an idle bot never sends input (a stationary target)', async () => {
     const room = new Room({ code: 'ABCDE', seed: 3 });
     const sent: ClientMessage[] = [];
