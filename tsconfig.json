@@ -1,9 +1,11 @@
 {
+  // Browser app. No Node types: a Node-only global in browser code fails here.
   "compilerOptions": {
     "target": "ES2022",
     "module": "ESNext",
     "moduleResolution": "Bundler",
     "lib": ["ES2022", "DOM", "DOM.Iterable"],
+    "types": [],
     "strict": true,
     "noUncheckedIndexedAccess": true,
     "skipLibCheck": true,
@@ -13,5 +15,6 @@
     "isolatedModules": true,
     "noEmit": true
   },
-  "include": ["src", "tests"]
+  "include": ["src"],
+  "exclude": ["src/types/web-globals.d.ts"]
 }

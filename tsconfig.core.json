@@ -1,0 +1,8 @@
+{
+  // Isolation check (spec §4): the shared core — and the DOM-free client model — compile
+  // with neither DOM nor Node types, so they run unchanged in the browser and on the server.
+  "extends": "./tsconfig.json",
+  "compilerOptions": { "lib": ["ES2022"], "types": [] },
+  "include": ["src/sim", "src/physics", "src/geometry", "src/session", "src/api.ts", "src/client", "src/types/web-globals.d.ts"],
+  "exclude": []
+}

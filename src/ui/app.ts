@@ -26,6 +26,7 @@ const REJECT_TEXT: Record<JoinRejectReason, string> = {
   full: 'That room is full.',
   inProgress: 'That room is already playing a match.',
   badToken: 'Could not rejoin that room.',
+  serverFull: 'The server is full right now. Try again in a moment.',
 };
 
 function loadName(): string {
@@ -137,7 +138,7 @@ export class App {
   private onMessage(msg: ServerMessage): void {
     const before = this.view;
     this.view = reduce(this.view, msg, performance.now());
-    if (msg.type === 'error' || msg.type === 'joinRejected') this.errorShownAt = performance.now();
+    if (msg.type === 'error' || msg.type === 'joinRejected' || msg.type === 'replaced') this.errorShownAt = performance.now();
     // Practice has no lobby to show: start once, as soon as the practice room is ready.
     // (Once only: a failing start answers with error + lobby, which must not loop.)
     if (msg.type === 'lobby' && msg.practice && msg.canStart && !this.autoStartSent) {

@@ -179,9 +179,13 @@ Accepted costs:
   geometry math, which runs in Node.)
 - `server/` is the **only** place Node APIs are allowed, and it never imports client/UI
   code.
-- Enforced by compilation, not convention: `server/` has its own tsconfig with no `dom`
-  lib that includes only `server/` plus the shared folders, so an accidental DOM or
-  client import fails to compile. The client tsconfig excludes `server/`.
+- Enforced by compilation, not convention, with one tsconfig per environment:
+  `tsconfig.core.json` compiles the shared core (and the DOM-free client model) with
+  neither DOM nor Node types, so a `document` or `process` there fails; `tsconfig.json`
+  (browser) has no Node types; `server/tsconfig.json` has Node but no DOM. A unit test
+  additionally checks that no `server/` file imports browser-side code (`src/client`,
+  `src/ui`, the renderer, input, camera). `npm run build` runs the core and server checks
+  first; `npm run typecheck` runs all four configs.
 - The client finds the server through one setting, `VITE_SERVER_URL` (default
   `ws://localhost:8787`). Moving the server to a real host means changing that value and
   deploying; no code changes.
@@ -671,9 +675,14 @@ is no peer-to-peer traffic.
 
 ### The server process (`server/`)
 
-- One port serves both HTTP (`GET /health` → `200 ok`) and the WebSocket. Port from
-  `SERVER_PORT` (default 8787). `npm run dev` starts it alongside Vite; `npm run server`
-  starts it alone.
+- One port serves both HTTP (`GET`/`HEAD /health` → `200 ok`; other methods `405`) and
+  the WebSocket. Port from `SERVER_PORT` (default 8787); a port already in use makes
+  startup fail with an error rather than crash. `npm run dev` starts it alongside Vite;
+  `npm run server` starts it alone.
+- Capacity limits: at most 500 connections (more are closed with 1013) and 200 rooms (a
+  `createRoom` beyond that is answered `joinRejected: serverFull`). A 30 s ping heartbeat
+  terminates half-open connections, so a vanished player doesn't keep a room alive.
+- A room whose tick throws is closed and removed; the loop and every other room carry on.
 - A single drift-corrected 60 Hz loop ticks every room (`server/loop.ts`): ticks are due
   at absolute times, so late timer wake-ups catch up rather than slowing the game, and
   after a long stall it catches up at most 5 ticks and resyncs instead of spiralling.
@@ -682,10 +691,13 @@ is no peer-to-peer traffic.
   as nobody is connected.
 - Each socket gets a `ConnectionHandler` (`server/connection.ts`): before joining it
   accepts only `createRoom`/`joinRoom`/`rejoin`; afterwards everything goes to its room.
-  Per-connection limits: messages over 4 KB close the socket (1009), more than 30
-  messages per second sustained (burst 60) closes it (1008); invalid JSON or messages
-  are ignored. When a rejoin replaces a connection, the old socket is closed (4000) and
-  its close does *not* disconnect the player.
+  Per-connection limits: messages over 4 KB (bytes) close the socket (1009), binary
+  frames close it (1003), more than 30 messages per second sustained (burst 60) closes it
+  (1008), and so do more than 5 rejected joins (so room codes can't be enumerated from
+  one socket); invalid JSON or messages are ignored. After `leave`, the socket is unbound
+  from its player and may create or join again. When a rejoin replaces a connection, the
+  old one receives `{ type: 'replaced' }`, its socket is closed (4000), and its close does
+  *not* disconnect the player.
 
 ### Protocol
 
@@ -697,12 +709,13 @@ types live in `src/session/protocol.ts`, shared by client and server.
 | client → server | `createRoom`, `joinRoom { code }`, `rejoin { code, reconnectToken }` | connecting |
 | client → server | `setSkin`, `setReady`, `leave`; owner only: `setMap { mapId }`, `setConfig { targetScore?, roundTime? }`, `startMatch` | lobby (`leave` any time) |
 | client → server | `{ type:'input', seq, moveDir, shoot }` | match |
-| server → client | `roomJoined { code, playerId, reconnectToken }` or `joinRejected { reason }` | connecting |
+| server → client | `roomJoined { code, playerId, reconnectToken }` or `joinRejected { reason: notFound \| full \| inProgress \| badToken \| serverFull }` | connecting |
 | server → client | `{ type:'lobby', code, ownerId, players, settings: { mapId, targetScore, roundTime }, maps, canStart, practice }` | lobby, on every change that changes something |
 | server → client | `{ type:'matchStart', map, config, players, seed }` — the static data, sent once per match (and again to a player who rejoins) | match start |
 | server → client | `{ type:'snapshot', seq, state }` — dynamic state only (players, bullets, scores, phase, round, time) | 30 Hz during the match |
 | server → client | `{ type:'event', event }`: the sim's events (`playerKilled`, `roundStart`, `roundEnd`, `matchEnd`, `turnRefused`, `spawnFairnessFailed`) plus session events (`playerJoined`, `playerLeft`, `ownerChanged`) | as they happen |
-| server → client | `{ type:'error', message }` — a refused action, to that player only; also `connection replaced` to an old connection when the same token rejoins from a new one | any time |
+| server → client | `{ type:'error', message }` — a refused action, to that player only | any time |
+| server → client | `{ type:'replaced' }` — to an old connection when the same token rejoins from a new one; nothing follows | on rejoin |
 
 Every client message goes through `parseClientMessage` (`src/session/protocol.ts`) first,
 the trust boundary: anything malformed is dropped, names are trimmed to 1–20 characters,
@@ -714,8 +727,7 @@ room codes are upper-cased and must be 5–6 characters, and unknown fields are 
   even when an input message arrives between ticks.
 - Input is sent only when it changes.
 - A rejoin with a token whose player is still connected replaces the old connection: the
-  old one receives `error: connection replaced` and nothing more, and the server adapter
-  closes it.
+  old one receives `replaced` and nothing more, and the server adapter closes it.
 - The room never re-broadcasts the lobby for a change that changes nothing (same ready
   flag, same skin). Limiting message rate and size per connection is the server
   adapter's job (M2), not the room's.

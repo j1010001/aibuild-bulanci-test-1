@@ -23,7 +23,7 @@ export type ClientMessage =
 
 // ---- Server -> client ----
 
-export type JoinRejectReason = 'notFound' | 'full' | 'inProgress' | 'badToken';
+export type JoinRejectReason = 'notFound' | 'full' | 'inProgress' | 'badToken' | 'serverFull';
 
 export type LobbyPlayer = { id: PlayerId; name: string; skinId: string; ready: boolean; connected: boolean };
 
@@ -58,7 +58,9 @@ export type ServerMessage =
   | { type: 'matchStart'; map: MapDef; config: Config; players: { id: PlayerId; name: string; skinId: string }[]; seed: number }
   | { type: 'snapshot'; seq: number; state: DynamicState }
   | { type: 'event'; event: GameEvent | SessionEvent }
-  | { type: 'error'; message: string };
+  | { type: 'error'; message: string }
+  /** Sent to a connection whose player has just rejoined from a newer one; nothing follows. */
+  | { type: 'replaced' };
 
 // ---- Limits (validated by the Room; names and codes by the parser) ----
 

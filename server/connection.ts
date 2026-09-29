@@ -1,6 +1,7 @@
 // One socket's adapter to the rooms (spec §12). Transport-agnostic: the WebSocket layer
-// forwards text frames to onMessage and its close event to onClose. Limits message size
-// and rate per connection — the Room itself never rate-limits (spec §12).
+// forwards text frames to onMessage, binary frames to onBinary and its close event to
+// onClose. Limits message size, message rate and failed joins per connection — the Room
+// itself never rate-limits (spec §12).
 
 import { parseClientMessage, type ClientMessage, type ServerMessage } from '../src/session/protocol';
 import type { Room } from '../src/session/room';
@@ -16,11 +17,14 @@ export type ConnectionOptions = {
   /** Token-bucket refill rate. Input is sent only on change, so honest clients stay far below. */
   maxMessagesPerSecond?: number;
   burst?: number;
+  /** Rejected joins allowed per connection, so room codes can't be enumerated through one socket. */
+  maxFailedJoins?: number;
   now?: () => number;
 };
 
-const CLOSE_TOO_LARGE = 1009;
+const CLOSE_UNSUPPORTED = 1003;
 const CLOSE_POLICY = 1008;
+const CLOSE_TOO_LARGE = 1009;
 const CLOSE_REPLACED = 4000;
 
 export class ConnectionHandler {
@@ -28,10 +32,12 @@ export class ConnectionHandler {
   private playerId: string | null = null;
   private replaced = false;
   private closed = false;
+  private failedJoins = 0;
 
   private readonly maxBytes: number;
   private readonly rate: number;
   private readonly burst: number;
+  private readonly maxFailedJoins: number;
   private readonly now: () => number;
   private tokens: number;
   private refilledAt: number;
@@ -44,6 +50,7 @@ export class ConnectionHandler {
     this.maxBytes = opts.maxMessageBytes ?? 4096;
     this.rate = opts.maxMessagesPerSecond ?? 30;
     this.burst = opts.burst ?? 60;
+    this.maxFailedJoins = opts.maxFailedJoins ?? 5;
     this.now = opts.now ?? (() => performance.now());
     this.tokens = this.burst;
     this.refilledAt = this.now();
@@ -51,7 +58,7 @@ export class ConnectionHandler {
 
   onMessage(text: string): void {
     if (this.closed) return;
-    if (text.length > this.maxBytes) return this.kill(CLOSE_TOO_LARGE, 'message too large');
+    if (Buffer.byteLength(text, 'utf8') > this.maxBytes) return this.kill(CLOSE_TOO_LARGE, 'message too large');
     if (!this.takeToken()) return this.kill(CLOSE_POLICY, 'too many messages');
 
     let raw: unknown;
@@ -68,9 +75,22 @@ export class ConnectionHandler {
       return this.enter(msg);
     }
     if (!this.room || this.playerId === null) return this.send({ type: 'error', message: 'join a room first' });
-    this.room.handle(this.playerId, msg).catch((err: unknown) => {
+    const room = this.room;
+    const playerId = this.playerId;
+    if (msg.type === 'leave') {
+      // Unbind first: this socket no longer speaks for that player, so its eventual close
+      // must not disconnect them again (they may already have rejoined elsewhere).
+      this.room = null;
+      this.playerId = null;
+    }
+    room.handle(playerId, msg).catch((err: unknown) => {
       this.send({ type: 'error', message: err instanceof Error ? err.message : 'internal error' });
     });
+    if (msg.type === 'leave') this.registry.removeIfEmpty(room.code);
+  }
+
+  onBinary(): void {
+    if (!this.closed) this.kill(CLOSE_UNSUPPORTED, 'binary frames are not supported');
   }
 
   onClose(): void {
@@ -85,16 +105,25 @@ export class ConnectionHandler {
 
   private enter(msg: Extract<ClientMessage, { type: 'createRoom' | 'joinRoom' | 'rejoin' }>): void {
     const room = msg.type === 'createRoom' ? this.registry.create() : this.registry.get(msg.code);
-    if (!room) return this.send({ type: 'joinRejected', reason: 'notFound' });
+    if (!room) return this.reject(msg.type === 'createRoom' ? 'serverFull' : 'notFound');
     const result = msg.type === 'rejoin' ? room.rejoin(msg.reconnectToken, this.sink) : room.join(msg.name, this.sink);
-    if (!result.ok) return this.send({ type: 'joinRejected', reason: result.reason });
+    if (!result.ok) {
+      this.registry.removeIfEmpty(room.code); // a freshly created room nobody got into
+      return this.reject(result.reason);
+    }
     this.room = room;
     this.playerId = result.playerId;
   }
 
+  private reject(reason: Extract<ServerMessage, { type: 'joinRejected' }>['reason']): void {
+    this.send({ type: 'joinRejected', reason });
+    this.failedJoins += 1;
+    if (this.failedJoins > this.maxFailedJoins) this.kill(CLOSE_POLICY, 'too many failed joins');
+  }
+
   private readonly sink = (msg: ServerMessage): void => {
     this.send(msg);
-    if (msg.type === 'error' && msg.message === 'connection replaced') {
+    if (msg.type === 'replaced') {
       this.replaced = true;
       this.kill(CLOSE_REPLACED, 'replaced by a newer connection');
     }
@@ -111,8 +140,9 @@ export class ConnectionHandler {
 
   private takeToken(): boolean {
     const t = this.now();
-    this.tokens = Math.min(this.burst, this.tokens + ((t - this.refilledAt) / 1000) * this.rate);
-    this.refilledAt = t;
+    const elapsed = Math.max(0, t - this.refilledAt); // an injected clock may step backwards
+    this.tokens = Math.min(this.burst, this.tokens + (elapsed / 1000) * this.rate);
+    this.refilledAt = Math.max(this.refilledAt, t);
     if (this.tokens < 1) return false;
     this.tokens -= 1;
     return true;

@@ -19,6 +19,8 @@ export function randomCode(length = 5): string {
 
 export type RegistryOptions = {
   newCode?: () => string;
+  /** Each room with a match holds a physics world; cap them. */
+  maxRooms?: number;
   roomOptions?: Omit<RoomOptions, 'code'>;
 };
 
@@ -31,7 +33,9 @@ export class RoomRegistry {
     return this.rooms.size;
   }
 
-  create(): Room {
+  /** A new, empty room — or null when the server is at its room limit. */
+  create(): Room | null {
+    if (this.rooms.size >= (this.opts.maxRooms ?? 200)) return null;
     const newCode = this.opts.newCode ?? randomCode;
     for (let attempt = 0; attempt < 100; attempt++) {
       const code = newCode();
@@ -54,7 +58,14 @@ export class RoomRegistry {
 
   tickAll(dt: number): void {
     for (const room of [...this.rooms.values()]) {
-      room.tick(dt);
+      try {
+        room.tick(dt);
+      } catch (err) {
+        // One broken room must not take the loop (and every other room) down with it.
+        console.error(`room ${room.code} failed and was closed:`, err);
+        this.remove(room);
+        continue;
+      }
       if (room.isEmpty()) this.remove(room);
     }
   }
@@ -64,7 +75,11 @@ export class RoomRegistry {
   }
 
   private remove(room: Room): void {
-    room.dispose();
     this.rooms.delete(room.code);
+    try {
+      room.dispose();
+    } catch (err) {
+      console.error(`room ${room.code} failed to dispose:`, err);
+    }
   }
 }

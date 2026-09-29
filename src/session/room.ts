@@ -146,7 +146,7 @@ export class Room {
     const wasDisconnected = member.sink === null;
     // A second connection with the same token (another tab, a reconnect before the old
     // socket's close was noticed) replaces the first. The adapter closes the old socket.
-    if (member.sink !== null) member.sink({ type: 'error', message: 'connection replaced' });
+    if (member.sink !== null) member.sink({ type: 'replaced' });
     member.sink = sink;
     member.lastInputSeq = -1; // a reloaded client restarts its input sequence
     if (this.ownerId === null) this.ownerId = member.id;

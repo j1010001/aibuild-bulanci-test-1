@@ -91,6 +91,8 @@ export function reduce(view: ClientView, msg: ServerMessage, now: number): Clien
       return view;
     case 'error':
       return { ...view, error: msg.message };
+    case 'replaced':
+      return { ...view, error: 'This game was opened in another tab or window.' };
   }
 }
 
