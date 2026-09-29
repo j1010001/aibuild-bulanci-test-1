@@ -90,6 +90,29 @@ describe('seeded sim (spec §4 determinism)', () => {
     expect(newGame(42).seed).toBe(42);
   });
 
+  it('rejects a seed it could not replay (NaN, Infinity, non-integer) instead of recording it', () => {
+    for (const bad of [Number.NaN, Number.POSITIVE_INFINITY, 1.5]) {
+      expect(() => newGame(bad)).toThrow(/seed/);
+    }
+  });
+
+  it('records the seed actually used, so an out-of-range seed still replays from state.seed', () => {
+    const game = newGame(-1);
+    expect(game.seed).toBe(2 ** 32 - 1);
+    expect(spawns(newGame(game.seed))).toEqual(spawns(game));
+  });
+
+  // Covers all load-time state, not just spawns, while tolerating three.js's internal
+  // Math.random use for geometry UUIDs (see the step() test below).
+  it('no load-time state depends on Math.random', () => {
+    vi.spyOn(Math, 'random').mockReturnValue(0.1);
+    const low = toSnapshot(newGame(42));
+    vi.restoreAllMocks();
+    vi.spyOn(Math, 'random').mockReturnValue(0.9);
+    const high = toSnapshot(newGame(42));
+    expect(low).toEqual(high);
+  });
+
   it('replays identically across round boundaries (each boundary re-runs spawn placement)', () => {
     const a = runTicks(newGame(7), 120);
     const b = runTicks(newGame(7), 120);
@@ -97,9 +120,14 @@ describe('seeded sim (spec §4 determinism)', () => {
     expect(toSnapshot(a)).toEqual(toSnapshot(b));
   });
 
-  it('never calls Math.random — all sim randomness comes from the seed', () => {
+  // Scoped to step(): createGame builds the donut's three.js BufferGeometry, whose
+  // constructor calls Math.random for an object UUID — a label, not game state. Initial
+  // spawns are covered by the same-seed-identical-spawns test above.
+  it('never calls Math.random while stepping — round-transition respawns come from the seed', () => {
+    const game = newGame(7);
     const spy = vi.spyOn(Math, 'random');
-    runTicks(newGame(7), 120);
+    const end = runTicks(game, 120);
+    expect(end.roundNumber).toBeGreaterThan(3);
     expect(spy).not.toHaveBeenCalled();
   });
 });
@@ -119,6 +147,12 @@ describe('GameApi seed', () => {
     b.runTicks(120);
     expect(a.getState().roundNumber).toBeGreaterThan(3);
     expect(a.getState()).toEqual(b.getState());
+  });
+
+  it('picks a fresh seed for each unseeded start (not a fixed default)', async () => {
+    const a = await started();
+    const b = await started();
+    expect(a.getState().seed).not.toBe(b.getState().seed); // 1-in-2^32 false failure
   });
 
   it('without a seed, one is chosen and exposed, and replaying with it reproduces the run', async () => {
