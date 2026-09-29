@@ -89,6 +89,7 @@ test('the setup screen remembers the last choices, and Back returns home', async
 
 test('window.GameClient.startLocalMatch runs the same kind of match for a harness', async ({ page }) => {
   await page.goto('/');
+  await page.waitForFunction(() => window.GameClient !== undefined); // defined once the physics engine has loaded
   await page.evaluate(() => window.GameClient.startLocalMatch({ bots: 2, difficulty: 'easy', mapId: 'open', targetScore: 1, seed: 3 }, 'Harness'));
   await expect(page.locator('#ui')).toHaveAttribute('data-screen', 'match');
   const names = await page.evaluate(() => window.GameAPI!.getState().players.map((p) => p.name));
