@@ -75,6 +75,8 @@ Canonical vocabulary used consistently throughout.
   browsers are thin clients. Built and tested against a local server first, deployed
   only once it works (§4 isolation rule).
 - Solo practice runs entirely in the browser, with no server.
+- Play vs bots runs entirely in the browser too: the human against 1–7 computer
+  opponents, all at one chosen difficulty (Easy / Normal / Hard), free-for-all (§12).
 - Real-time, axis-aligned movement and shooting.
 - One-hit-kill traveling bullets with a fire cadence.
 - Four primitives (cube, cone, donut, arch), each a real 3D collision shape (§7) able to
@@ -104,13 +106,13 @@ Each unit has one job and a well-defined interface.
 |---|---|---|
 | **Simulation core (`sim`)** | TypeScript. Owns game state, applies inputs per tick, emits events. No DOM, no three.js rendering, no networking. Deterministic given the same physics world contents (see below). | `physics` |
 | **Physics world (`physics`)** | A real 3D collision world (Rapier — see §7) built once per game from the map's obstacles. Answers every collision question `sim` asks: can this player move this far, does the gun fit, what does this bullet hit. The one genuinely stateful, non-serializable part of an otherwise-plain `State` (excluded from `GameApi.getState()`'s snapshot). | nothing (a pure geometry/query engine) |
-| **Session (`session`)** | The `Room`: lobby state (roster, owner, skins, ready flags, map, config, start gate), the match lifecycle, per-player input with shoot edges latched until the next tick, disconnect/reconnect and ownership transfer. Drives `sim` through `GameApi`. Its output is a stream of protocol messages (§12). Environment-free: time is injected (it never owns a timer), so the same class runs on the server, in tests, and in the browser for practice. | sim |
+| **Session (`session`)** | The `Room`: lobby state (roster, owner, skins, ready flags, map, config, start gate), the match lifecycle, per-player input with shoot edges latched until the next tick, disconnect/reconnect and ownership transfer. Drives `sim` through `GameApi`. Its output is a stream of protocol messages (§12). Environment-free: time is injected (it never owns a timer), so the same class runs on the server, in tests, and in the browser for local games (practice and play vs bots). | sim |
 | **Server (`server/`)** | A thin Node shell around `session`: HTTP + WebSocket, the room-code registry, the fixed-rate 60 Hz tick timer, the process entry point. The only unit allowed to use Node APIs. Never imports client/UI code. | session |
 | **Network client** | Browser WebSocket client: sends input, receives snapshots/events, drops stale snapshots, interpolates between snapshots for the renderer. Never touches game rules. | session protocol types |
 | **Renderer** | three.js scene. Pure function of a `RenderState` (the static `matchStart` data plus one dynamic snapshot, built by the client view model): plane, obstacles, players, bullets. Obstacle meshes are built from the same `buildObstacleGeometry` output `physics` turns into colliders (§7, §11) — not a separately-tuned visual model. Frees GPU buffers of meshes it removes; all bullets share one geometry and material. | geometry, client view-model types (read-only) |
 | **Input** | Keyboard → normalized `{ moveDir, shoot }`. Holds no state. | — |
 | **Editor** | Author maps; persist locally; JSON import/export. Shares primitive definitions with `sim`. | sim definitions |
-| **Control surface (`GameApi`)** | The one entry point that drives `sim`: roster, `start`/`reset`, input (`setMoveDir`/`pressShoot`), advancing time (`tick`/`runTicks`), and introspection (`getState`/`getEvents`). An AI/test harness calls the *same* methods a Room does — there is no UI-only path. In the page it is exposed as `window.GameAPI` during practice only (the practice room's game; `null` otherwise, since a multiplayer game runs on the server). `start()` is async — the physics engine's WASM module needs one await the first time it's used per page/process; every other call, including `tick()`/`runTicks()`, is synchronous after that. | sim |
+| **Control surface (`GameApi`)** | The one entry point that drives `sim`: roster, `start`/`reset`, input (`setMoveDir`/`pressShoot`), advancing time (`tick`/`runTicks`), and introspection (`getState`/`getEvents`). An AI/test harness calls the *same* methods a Room does — there is no UI-only path. In the page it is exposed as `window.GameAPI` during a local game only (practice or play vs bots: the local room's game; `null` otherwise, since a multiplayer game runs on the server). `start()` is async — the physics engine's WASM module needs one await the first time it's used per page/process; every other call, including `tick()`/`runTicks()`, is synchronous after that. | sim |
 
 `sim` exposes `step(state, inputs, dt) → { state, events }` and
 `createGame(RAPIER, config, map, roster, seed) → { state, events }`. Given the same
@@ -133,11 +135,13 @@ seed must be an integer; it is stored as the 32-bit value actually used (`seed >
 
 **Two harness surfaces in the page.** `window.GameClient` drives the game exactly as the
 UI does: `send(ClientMessage)` in, `view()` (the ClientView the screens render) out, plus
-`startPractice`, `leave`, and for practice `pause`/`resume`/`runTicks(n)`, which tick the
-practice room so its snapshots flow through the same path the UI reads. `window.GameAPI`
-(practice only) gives direct access to the simulation for introspection. The page loop
-stops ticking practice while either `GameClient.pause()` or `GameAPI.pause()` is in
-effect.
+`startPractice`, `startLocalMatch({ bots, difficulty, mapId?, targetScore?, roundTime?,
+seed? })`, `playAgain`, `leave`, and for local games `pause`/`resume`/`runTicks(n)`, which
+tick the local room (and step its bots) so its snapshots flow through the same path the
+UI reads. A match starts asynchronously, so a harness waits for `view().screen ===
+'match'` before relying on `runTicks`. `window.GameAPI` (local games only) gives direct
+access to the simulation for introspection. The page loop stops ticking a local game
+while either `GameClient.pause()` or `GameAPI.pause()` is in effect.
 
 `GameApi.tick()`/`runTicks(n)` advance the sim on demand, independent of real time or a
 render frame — the point is that an AI harness can fast-forward a game far faster than
@@ -612,10 +616,12 @@ replaced.
   and a countdown from `roundTime`; each player's color, name ("you" marked) and score,
   highest first, dimmed when dead and struck through when disconnected; a two-second
   "X wins round N" / "Round N: draw" banner after each round; a Leave button.
-- **Screens** (`src/ui/app.ts`): Home (name, Practice, Create game, Join by code, Level
-  editor) → Lobby (room code, players, colors, ready, owner's settings and Start) → Match
-  → Match end (winner or "no winner", final scores, Back to lobby / Leave). Practice skips
-  the lobby and never reaches Match end (§10). Every screen transition is decided by the
+- **Screens** (`src/ui/app.ts`): Home (name, Practice, Play vs bots, Create game, Join by
+  code, Level editor) → Lobby (room code, players, colors, ready, owner's settings and
+  Start) → Match → Match end (winner or "no winner", final scores, Back to lobby / Leave).
+  Practice skips the lobby and never reaches Match end (§10). Play vs bots opens a setup
+  screen (bots 1–7, difficulty, map, round wins to win; the last choices are remembered),
+  then skips the lobby; its Match end offers Play again / Home. Every screen transition is decided by the
   pure view model (`src/client/model.ts`); player names are only ever inserted as text.
 - Skins: a fixed, predefined palette of distinct colors (not user-importable, no patterns
   in v1). Uniqueness of `skinId` is enforced in the lobby. Skins are static client-side
@@ -699,6 +705,14 @@ is no peer-to-peer traffic.
   for client correctness, because only the server simulates.
 - Solo **practice** runs a `Room` in-process in the browser, driven by the page's own
   loop, with no server and no network.
+- **Play vs bots** (`src/client/localMatchSession.ts`) is the same, with normal rules: a
+  `LocalMatchSession` runs a non-practice `Room` in the page with the human (its owner)
+  and 1–7 `BotPlayer`s, each on its own `InProcessSession`, so bots join, ready up and
+  play through exactly the messages a remote player sends. Its `tick()` is the only clock:
+  it steps the bots on simulated time, then ticks the room, so with a seed a local match
+  is reproducible whichever loop drives it. Bots are named "Bot N (Level)". It starts by
+  itself once every bot is ready, and again only when `playAgain()` is called after a
+  match (ignored mid-match). Settings outside the room limits are refused up front.
 
 ### The server process (`server/`)
 
@@ -731,17 +745,37 @@ is no peer-to-peer traffic.
 `BotPlayer` (`src/client/botPlayer.ts`) plays through any `Session` with the same view
 model and `InputSender` the UI uses. In the lobby a guest readies itself; an owner with
 host settings applies them and starts a match whenever the start gate opens, so after
-each match the bots return to the lobby and play another. In a match it hunts the
-nearest opponent: line up on the axis with the smaller gap, face the target and fire —
-backing off only when the turn would be refused because the gun wouldn't fit, and never
-firing into an obstacle between it and the target (a line-of-fire check against obstacle
-footprints; walls lower than bullet height don't count). When it can't make progress —
-pinned against an edge or an obstacle, or lined up behind a wall — it breaks out with a
-short move in a random (seeded) other direction. After lining up it waits a reaction
-delay from its own seeded generator (identical bots would otherwise fire on the same tick
-and trade kills forever), it sends stops immediately and throttles other input to stay
-far below the server's rate limit, and it records each finished match in `results` and
-why its session closed. `InProcessSession` attaches any number of bots (or a practice
+each match the bots return to the lobby and play another. In a match its `BotBrain`
+(`src/client/bots/brain.ts`) decides every input, from what a player can see — the
+snapshot, the map, the config, never hidden state — using standard game-AI techniques (no
+learning, no language model):
+
+- **Navigation** (`src/client/bots/navigation.ts`): a grid over the board (0.5 cells) of
+  where the whole player fits — body from the ground to `playerHeight`, and the gun,
+  which must fit when turned into each move and along it — built from the same obstacle
+  geometry the physics collides with, and shared by all bots on a map. A* over (cell,
+  heading) with a turn penalty gives axis-aligned paths with few turns; a path starts with
+  one or two exact single-axis legs from the bot's real position, so a bot resting
+  against a wall can always leave. A goal nobody fits in, or (when chasing) one no path
+  reaches, is replaced by the reachable place nearest it. Arch doors narrower than
+  `MIN_BOT_DOOR_WIDTH` (1.7) may be unplannable wherever they sit on the grid.
+- **Decisions — utility AI**: every `thinkMs` it scores dodge 1.0 · evade 0.95 · attack
+  0.9 · chase 0.5 · wander 0.1 and does the best available. *Dodge*: step aside from the
+  soonest bullet that will pass through it (one roll and one side per bullet, only until
+  it is out of the path). *Evade*: step out of an enemy's firing line when it can't fire
+  first. *Attack*: lined up on a target within its aim and with a clear line of fire
+  (walls lower than bullet height don't count), face it — backing off first when the gun
+  wouldn't fit on the turn — then fire after a reaction delay, when its gun is ready by
+  the snapshot's clock. *Chase*: follow a path toward the chosen target. *Wander*: no
+  one to hunt. When trying to move but getting nowhere it escapes in a random other
+  direction; a new round resets its plans.
+- **Difficulty** (`src/client/bots/difficulty.ts`) changes settings, not logic: how often
+  it re-decides, the reaction delay, how precisely it lines up (aim), how often it dodges
+  and evades, and how it picks targets (nearest · one it can shoot now · the most exposed).
+  Easy: slow, sloppy, never dodges. Hard: quick, precise, usually dodges.
+- All its randomness is seeded; it sends stops immediately and throttles other input
+  (only a sent change restarts the 50 ms interval) to stay far below the server's rate
+  limit; it records each finished match in `results` and why its session closed. `InProcessSession` attaches any number of bots (or a practice
 player) to an in-memory `Room`; `NetSession` attaches them to the real server.
 `npm run bot -- --create --count 3 --target-score 1 --once` fills a room on a running
 server and prints the winner; options are validated before connecting, and a lost
@@ -960,6 +994,16 @@ game. It treats input as untrusted:
     and starting; two bots playing an in-memory match to an agreed winner; the rate
     limit respected; seeded reaction delays; three bots over real sockets; the CLI end
     to end.
+  - **Bot AI** (`navigation.test.ts`, `botBrain.test.ts`, `botMatches.test.ts`,
+    `localMatch.test.ts`): paths walkable by the real physics from arbitrary starts
+    (doors, low slots, lintels, low walls, unreachable goals, speed); each behavior on
+    scripted snapshots; whole seeded bot matches on every map at every level finish with
+    a winner and no round running out the clock; the difficulty ranking over 30 seeded
+    matches per pair (hard > normal > easy, each in nearly all); the local match's setup,
+    auto-start, play, replay and teardown.
+  - Play vs bots end to end (`tests/e2e/local.spec.ts`): Home → setup → a match with the
+    keyboard → match end → Play again → Home, the remembered setup, and
+    `GameClient.startLocalMatch` for a harness.
   - Two-browser smoke test (`tests/e2e/multiplayer.spec.ts`, `npm run test:e2e`,
     Playwright): two separate browser contexts create a room, join it by code, ready,
     set the map and score, start, and one player kills the other with real key presses

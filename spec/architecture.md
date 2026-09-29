@@ -13,7 +13,7 @@ disagree, the design spec wins. Fix whichever one is wrong.
 
 Three deployable pieces share one environment-free core:
 
-- **Browser client:** UI, input, rendering, the network client, and practice mode.
+- **Browser client:** UI, input, rendering, the network client, and the local games (practice, play vs bots).
 - **Game server:** a thin Node shell that runs rooms. It is authoritative (§4).
 - **Shared core:** the simulation, physics, geometry and the session/room model. It runs unchanged in the browser, on the server and in tests.
 
@@ -26,7 +26,7 @@ flowchart LR
     Renderer["Renderer<br/>src/render.ts (built)"]
     NetClient["Network client<br/>src/net/client.ts (built)"]
     Editor["Level editor<br/>src/editor (M3)"]
-    PracticeRoom["Practice: LocalSession<br/>src/client (built)"]
+    PracticeRoom["Local games: LocalSession (practice),<br/>LocalMatchSession + bots (vs bots)<br/>src/client (built)"]
   end
 
   subgraph Core["Shared core (no DOM, no Node APIs)"]
@@ -45,7 +45,7 @@ flowchart LR
     Loop["60 Hz tick loop<br/>server/loop.ts (built)"]
   end
 
-  Bot["Headless bots<br/>src/client/botPlayer.ts, scripts/bot.ts (built)"]
+  Bot["Bots: BotPlayer + BotBrain + NavGrid<br/>src/client/botPlayer.ts, src/client/bots, scripts/bot.ts (built)"]
 
   Input --> NetClient
   Input --> PracticeRoom
@@ -53,6 +53,7 @@ flowchart LR
   Camera --> Renderer
   NetClient <-->|"WebSocket: protocol messages"| WS
   Bot <-->|"WebSocket"| WS
+  PracticeRoom -->|"InProcessSession"| Bot
   WS --> Registry --> Room
   Loop -->|"tick()"| Room
   PracticeRoom --> Room
@@ -78,16 +79,16 @@ flowchart LR
 | **PhysicsWorld** | A Rapier world used purely for collision queries: obstacle colliders built once per game, one kinematic body per player. Answers `moveDistance` (shape-cast sweep), `gunFits` (overlap), `raycastBullet`, `isFreeOfObstacles`. The one live, non-serializable part of `State`. | `src/physics/world.ts`, `obstacles.ts`, `rapier.ts` | built |
 | **Simulation (`sim`)** | Game rules. `createGame(RAPIER, config, map, roster, seed)` and `step(state, inputs, dt) → {state, events}`: movement, turning, shooting, deaths, rounds, match, spawns. Deterministic given the seed (§4). | `src/sim/{state,step,spawn,rng,types,snapshot}.ts` | built |
 | **Map loader** | The one entry point for every map (built-in, preset, import, received by the server): version check, defaults, hard constraints. | `src/sim/mapFormat.ts` | built |
-| **GameApi** | A control surface over one game: roster, `start({seed})`, `setMoveDir` / `pressShoot`, `tick` / `runTicks`, `getState` / `getEvents`, `pause` / `resume`. A Room and AI harnesses call the same methods. Exposed as `window.GameAPI` during practice. | `src/api.ts` | built |
+| **GameApi** | A control surface over one game: roster, `start({seed})`, `setMoveDir` / `pressShoot`, `tick` / `runTicks`, `getState` / `getEvents`, `pause` / `resume`. A Room and AI harnesses call the same methods. Exposed as `window.GameAPI` during a local game (practice or vs bots). | `src/api.ts` | built |
 | **Room** | The session: lobby (roster, owner, unique skins, ready, map, config, start gate), match lifecycle, input latching, disconnect/reconnect, ownership transfer. Emits protocol messages. Time is injected; it never owns a timer. | `src/session/room.ts`, `protocol.ts`, `maps.ts` | built |
 | **Game server** | Node shell: WebSocket connections (per-socket size, rate and failed-join limits; connection and room caps; heartbeat), room codes, one drift-corrected 60 Hz loop for all rooms, empty-room cleanup. The only place Node APIs are allowed. | `server/*` | built |
 | **Network client** | A `Session` over WebSocket: connects, sends `createRoom`/`joinRoom`/`rejoin` and client messages, delivers server messages, reports the close. Stale-snapshot discard lives in the client model; interpolation between the last two snapshots is applied before rendering. | `src/net/client.ts`, `src/client/interpolate.ts` | built |
 | **Renderer** | three.js scene as a pure function of a `RenderState`. Fixed tilted camera, framing computed from board size; obstacle meshes from Geometry. (The HUD is a DOM overlay, see UI screens.) | `src/render.ts` | built |
 | **Camera + Input** | Camera azimuth is the source of truth. Arrow and IJKL key mappings are derived from it (§8), then turned into `{moveDir, shoot}`. | `src/camera.ts`, `src/input.ts` | built |
-| **Client model** | Pure fold of server messages into the ClientView (screens, lobby, match, snapshots, result), the HUD model, the `InputSender`, the `Session` interface and `LocalSession` (practice), and the chase-and-shoot bot strategy. DOM-free, so it is unit-tested. | `src/client/*` | built |
-| **UI screens** | Home → Practice / Create / Join / Editor → Lobby → Match → Match end, drawn from the ClientView. Names only ever inserted as text. | `src/ui/*` | built |
+| **Client model** | Pure fold of server messages into the ClientView (screens, lobby, match, snapshots, result), the HUD model, the `InputSender`, the `Session` interface, `LocalSession` (practice) and `LocalMatchSession` (play vs bots), and the simple chase-and-shoot strategy. DOM-free, so it is unit-tested. | `src/client/*` | built |
+| **UI screens** | Home → Practice / Play vs bots (setup) / Create / Join / Editor → Lobby → Match → Match end (Play again for vs bots), drawn from the ClientView. Names only ever inserted as text. | `src/ui/*` | built |
 | **Level editor** | `EditorApi` (headless) plus a 2D surface and a live 3D preview; validation, presets, JSON import/export. | `src/editor/*` | M3 |
-| **Bot client** | `BotPlayer` plays through any Session with the UI's view model and InputSender (hunt or idle; seeded reaction delays). `InProcessSession` attaches it to an in-memory Room; `NetSession` to the real server. `npm run bot` is the CLI. | `src/client/botPlayer.ts`, `src/client/inProcessSession.ts`, `scripts/bot.ts` | built |
+| **Bot client** | `BotPlayer` plays through any Session with the UI's view model and InputSender. In a match its `BotBrain` decides: perception from the snapshot only, `NavGrid` A* paths, utility-scored dodge / evade / attack / chase / wander, and Easy / Normal / Hard profiles (`src/client/bots`). `InProcessSession` attaches it to an in-memory Room; `NetSession` to the real server. `npm run bot` is the CLI. | `src/client/botPlayer.ts`, `src/client/inProcessSession.ts`, `scripts/bot.ts` | built |
 
 ## 3. Dependency rules
 
@@ -194,20 +195,35 @@ When the owner leaves, the owner role passes to the next connected player (`owne
 
 A `Room` runs inside the page, driven by the page's own `requestAnimationFrame` fixed-timestep loop. Its snapshots go straight to the renderer. There is no server and no network. The rules, lobby model and messages are the same as in multiplayer.
 
+### 4.4b Play vs bots (M2.5)
+
+`LocalMatchSession` runs a normal (non-practice) `Room` in the page: the human is the owner, and 1–7 `BotPlayer`s join through their own `InProcessSession`s at one difficulty. The page loop calls its `tick()`, which steps the bots on simulated time and then ticks the room, so a seeded match is reproducible under the page loop, `runTicks` or a test. It starts by itself once the bots are ready; after a match, only `playAgain()` starts another.
+
+```mermaid
+flowchart LR
+  Page["Page loop / runTicks"] -->|"tick(dt)"| LMS["LocalMatchSession"]
+  LMS -->|"step(simNow)"| Bots["BotPlayer × N<br/>(BotBrain, NavGrid)"]
+  Bots -->|"input via InProcessSession"| Room
+  Human["Keyboard → InputSender"] -->|"InProcessSession"| Room
+  LMS -->|"room.tick(dt)"| Room
+  Room -->|"snapshots"| Human
+  Room -->|"snapshots"| Bots
+```
+
 ### 4.5 Three ways to drive the game headlessly (AI and tests)
 
 | Path | Scope | Speed | Status |
 |---|---|---|---|
 | `GameApi.runTicks(n)` | One game, rules only | Far faster than real time; deterministic with a seed | built |
 | `Room` with sink callbacks | Lobby, match, multiple clients, disconnects | Fast, no sockets | built |
-| `BotPlayer` + `InProcessSession` | Many bots in one in-memory Room, ticked by hand | Far faster than real time | built |
+| `BotPlayer` + `InProcessSession` (or a `LocalMatchSession`) | Many bots in one in-memory Room, ticked by hand | Far faster than real time; deterministic with a seed | built |
 | `scripts/bot.ts` over WebSocket | The real server end to end | Real time | built |
 
-In the page, `window.GameClient` is the UI-level harness: ClientMessages in, the ClientView out, and in practice `pause()`/`runTicks(n)` so the page loop and the harness don't both advance the same state (§4).
+In the page, `window.GameClient` is the UI-level harness: ClientMessages in, the ClientView out, `startLocalMatch(...)` / `playAgain()`, and in local games `pause()`/`runTicks(n)` so the page loop and the harness don't both advance the same state (§4).
 
 ## 5. State and data ownership
 
-- **Authoritative state:** `State` inside one `GameApi`, owned by one `Room`. On the server in multiplayer; in the page in practice.
+- **Authoritative state:** `State` inside one `GameApi`, owned by one `Room`. On the server in multiplayer; in the page in local games (practice, vs bots).
 - **`State.physics`:** a live handle, never serialized. `toSnapshot()` strips it.
 - **Network data:**
   - `matchStart` carries the static map and config once.

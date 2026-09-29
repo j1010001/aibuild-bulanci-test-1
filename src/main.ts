@@ -100,6 +100,9 @@ declare global {
       pause(): void;
       resume(): void;
       isPaused(): boolean;
+      /** Local games only: n fixed steps now. A match starts asynchronously (a few ms after
+       * startPractice / startLocalMatch / playAgain), so wait for view().screen === 'match'
+       * first — ticks before that only advance the lobby. */
       runTicks(n: number, dt?: number): void;
     };
     readonly GameAPI: GameApi | null;

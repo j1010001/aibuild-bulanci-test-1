@@ -4,7 +4,7 @@
 // it steps the bots on simulated time, then ticks the room, so a seeded local match is
 // reproducible whether the page loop, window.GameClient.runTicks or a test drives it.
 
-import type { ClientMessage, LobbyMessage, ServerMessage } from '../session/protocol';
+import { CONFIG_LIMITS, type ClientMessage, type LobbyMessage, type ServerMessage } from '../session/protocol';
 import { Room } from '../session/room';
 import { DEFAULT_CONFIG } from '../sim';
 import { BotPlayer } from './botPlayer';
@@ -46,6 +46,13 @@ export class LocalMatchSession implements Session {
   constructor(private readonly opts: LocalMatchOptions) {
     if (!Number.isInteger(opts.bots) || opts.bots < 1 || opts.bots > MAX_BOTS) {
       throw new RangeError(`LocalMatchSession: bots must be an integer from 1 to ${MAX_BOTS}, got ${opts.bots}`);
+    }
+    for (const key of ['targetScore', 'roundTime'] as const) {
+      const value = opts[key];
+      const { min, max } = CONFIG_LIMITS[key];
+      if (value !== undefined && (!Number.isInteger(value) || value < min || value > max)) {
+        throw new RangeError(`LocalMatchSession: ${key} must be an integer from ${min} to ${max}, got ${value}`);
+      }
     }
     this.room = new Room({ code: LOCAL_MATCH_CODE, maxPlayers: opts.bots + 1, mapId: opts.mapId, seed: opts.seed });
   }
@@ -97,9 +104,10 @@ export class LocalMatchSession implements Session {
     this.simNow += dt * 1000;
   }
 
-  /** After a match: start the next one as soon as the bots are ready again. */
+  /** After a match: start the next one as soon as the bots are ready again. Ignored while
+   * a match is running (it would skip that match's results). */
   playAgain(): void {
-    if (!this.closed) this.startArmed = true;
+    if (!this.closed && this.room.phase === 'lobby') this.startArmed = true;
   }
 
   close(): void {

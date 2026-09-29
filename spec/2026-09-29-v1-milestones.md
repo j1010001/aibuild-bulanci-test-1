@@ -10,7 +10,7 @@ Status: approved. The design authority is still `spec/2026-09-15-browser-party-s
 | M0 | Done: seeded RNG; player shape from one definition (gun collides where drawn, and is solid to other bodies); map loader and validator (every map enters a game through it); spec cleanup, with rooms capped at 8 players (operator decision). |
 | M1 | Done: shared `Room` + protocol (`src/session`), client view model, practice via `LocalSession`, screens and HUD. |
 | M2 | Done: authoritative server (`server/`), `NetSession` + interpolation + rejoin in the browser, headless bots + `npm run bot`, two-browser Playwright smoke test. |
-| M2.5 | Not started (added 2026-09-29): local play against bots with difficulty levels. |
+| M2.5 | In progress (added 2026-09-29): tasks 1–3 done (navigation grid + A*, bot brain with Easy / Normal / Hard, `LocalMatchSession`), task 4 (setup screen) and task 5 (tests, including `tests/e2e/local.spec.ts`) implemented; last reviews pending. `MIN_BOT_DOOR_WIDTH` (1.7) is the door width the M3 editor should warn below. Deviation: *take cover* became *evade* (step out of an enemy's firing line when it can't fire first) — simpler, and measured to separate the levels (hard > normal > easy in 60/60 seeded matches each). |
 | M3, M4 | Not started. |
 
 Deviation from the plan: until M3 (editor) exists, a room's map is chosen **by id from a built-in catalog** (`src/session/maps.ts`), so no client-supplied map data reaches the server. Every map, catalog maps included, already passes through the map loader in `GameApi.start`; custom maps will too.

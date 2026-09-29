@@ -1,18 +1,21 @@
-// The DOM screens (spec §12 flow): Home → Practice / Create / Join → Lobby → Match →
-// Match end → Lobby or Home. Every decision about which screen shows comes from the
+// The DOM screens (spec §12 flow): Home → Practice / Play vs bots (setup) / Create / Join
+// → Lobby → Match → Match end → Lobby, Play again (vs bots) or Home. Every decision about which screen shows comes from the
 // ClientView (src/client/model.ts); this file only draws it and forwards clicks as
 // ClientMessages to the current Session.
 
 import { hudModel } from '../client/hud';
 import { lastRoomAfter, parseLastRoom, type LastRoom } from '../client/lastRoom';
 import { InputSender } from '../client/inputSender';
-import { LocalMatchSession, type LocalMatchOptions } from '../client/localMatchSession';
+import { DIFFICULTY_LABEL, type Difficulty } from '../client/bots/difficulty';
+import { LocalMatchSession, MAX_BOTS, type LocalMatchOptions } from '../client/localMatchSession';
 import { LocalSession } from '../client/localSession';
 import { backToLobby, initialView, playerName, reduce, type ClientView } from '../client/model';
 import type { JoinTarget, Session } from '../client/session';
 import { bindKeyboard, type InputTarget, type KeyboardBinding } from '../input';
 import { CONFIG_LIMITS, NAME_MAX_LENGTH, type ClientMessage, type JoinRejectReason, type ServerMessage } from '../session/protocol';
+import { BUILT_IN_MAPS } from '../session/maps';
 import { SKIN_PALETTE } from '../session/skins';
+import { DEFAULT_CONFIG } from '../sim';
 import { h, option } from './dom';
 
 
@@ -21,6 +24,7 @@ export type Connect = (name: string, target: JoinTarget) => Session;
 
 const NAME_KEY = 'bps.name';
 const LAST_ROOM_KEY = 'bps.lastRoom'; // per tab: a reload or a dropped connection can rejoin
+const BOT_SETUP_KEY = 'bps.botSetup'; // the last "Play vs bots" choices
 const ERROR_MS = 3000;
 
 const REJECT_TEXT: Record<JoinRejectReason, string> = {
@@ -69,6 +73,34 @@ function saveLastRoom(room: LastRoom | null): void {
   }
 }
 
+type BotSetup = Required<Pick<LocalMatchOptions, 'bots' | 'difficulty' | 'mapId' | 'targetScore'>>;
+
+const DIFFICULTIES = Object.keys(DIFFICULTY_LABEL) as Difficulty[];
+
+/** The remembered setup, each field checked (storage is editable), else the defaults. */
+function loadBotSetup(): BotSetup {
+  const setup: BotSetup = { bots: 3, difficulty: 'normal', mapId: BUILT_IN_MAPS[0]!.id, targetScore: DEFAULT_CONFIG.targetScore };
+  try {
+    const raw = JSON.parse(localStorage.getItem(BOT_SETUP_KEY) ?? '{}') as Record<string, unknown>;
+    const { min, max } = CONFIG_LIMITS.targetScore;
+    if (Number.isInteger(raw.bots) && (raw.bots as number) >= 1 && (raw.bots as number) <= MAX_BOTS) setup.bots = raw.bots as number;
+    if (DIFFICULTIES.includes(raw.difficulty as Difficulty)) setup.difficulty = raw.difficulty as Difficulty;
+    if (BUILT_IN_MAPS.some((m) => m.id === raw.mapId)) setup.mapId = raw.mapId as string;
+    if (Number.isInteger(raw.targetScore) && (raw.targetScore as number) >= min && (raw.targetScore as number) <= max) setup.targetScore = raw.targetScore as number;
+  } catch {
+    // unreadable or unavailable: the defaults
+  }
+  return setup;
+}
+
+function saveBotSetup(setup: BotSetup): void {
+  try {
+    localStorage.setItem(BOT_SETUP_KEY, JSON.stringify(setup));
+  } catch {
+    // storage unavailable: the choices just aren't remembered
+  }
+}
+
 function formatTime(seconds: number): string {
   return `${Math.floor(seconds / 60)}:${String(seconds % 60).padStart(2, '0')}`;
 }
@@ -88,6 +120,7 @@ export class App {
   private readonly keyboard: KeyboardBinding;
   private target: JoinTarget | null = null; // how the current multiplayer session entered its room
   private connecting = false; // a multiplayer session is open but not yet in a room
+  private settingUp = false; // the "Play vs bots" setup is showing (over the home screen)
 
   constructor(
     private readonly root: HTMLElement,
@@ -109,16 +142,17 @@ export class App {
 
   /** Play vs bots: a local match that starts by itself (no lobby to click through). */
   startLocalMatch(opts: LocalMatchOptions, name = this.name): void {
-    const local = new LocalMatchSession(opts);
+    const local = new LocalMatchSession(opts); // throws on bad options, before the current session is touched
+    this.settingUp = false;
     this.attach(local);
     this.local = local;
     local.start(name);
     this.draw();
   }
 
-  /** After a local match vs bots: the next one, same bots and settings. */
+  /** After a local match vs bots (on its results): the next one, same bots and settings. */
   playAgain(): void {
-    if (!(this.local instanceof LocalMatchSession)) return;
+    if (!(this.local instanceof LocalMatchSession) || this.view.screen !== 'matchEnd') return;
     this.local.playAgain();
     this.backToLobby();
   }
@@ -132,6 +166,7 @@ export class App {
   }
 
   leave(): void {
+    this.settingUp = false;
     void this.session?.send({ type: 'leave' });
     if (this.session && !this.local) saveLastRoom(null); // leaving on purpose: nothing to rejoin
     this.detach();
@@ -246,6 +281,11 @@ export class App {
     const focused = document.activeElement instanceof HTMLElement ? document.activeElement.dataset.key : undefined;
     this.canvas.style.visibility = v.screen === 'match' || v.screen === 'matchEnd' ? 'visible' : 'hidden';
     this.hudEl = null;
+    if (v.screen === 'home' && this.settingUp) {
+      this.root.replaceChildren(this.setupScreen(), h('div', { class: 'toast' }, [v.error ?? '']));
+      this.root.dataset.screen = 'setup';
+      return;
+    }
     const screen =
       v.screen === 'home' ? this.homeScreen() : v.screen === 'lobby' ? this.lobbyScreen() : v.screen === 'match' ? this.matchScreen() : this.matchEndScreen();
     this.root.replaceChildren(screen, h('div', { class: 'toast' }, [v.error ?? '']));
@@ -281,6 +321,15 @@ export class App {
           ])
         : null,
       h('button', { class: lastRoom ? '' : 'primary', on: { click: () => this.startPractice(currentName()) } }, ['Practice']),
+      h('button', {
+        on: {
+          click: () => {
+            currentName();
+            this.settingUp = true;
+            this.draw();
+          },
+        },
+      }, ['Play vs bots']),
       h('button', { disabled: !this.connect, title: noServer, on: { click: () => this.startMultiplayer({ kind: 'create' }, currentName()) } }, ['Create game']),
       h('div', { class: 'row' }, [codeInput, h('button', { disabled: !this.connect, title: noServer, on: { click: join } }, ['Join'])]),
       h('button', { disabled: true, title: 'The level editor arrives in milestone M3.' }, ['Level editor']),
@@ -289,12 +338,69 @@ export class App {
     ]);
   }
 
+  /** "Play vs bots": how many, how good, where, and to how many round wins. */
+  private setupScreen(): HTMLElement {
+    const setup = loadBotSetup();
+    const select = (key: string, options: [string, string][], selected: string) => {
+      const el = document.createElement('select');
+      for (const [value, label] of options) el.append(option(value, label, value === selected));
+      el.dataset.key = key;
+      return el;
+    };
+    const bots = select('bots', Array.from({ length: MAX_BOTS }, (_, i) => [String(i + 1), String(i + 1)]), String(setup.bots));
+    const difficulty = select('difficulty', DIFFICULTIES.map((d) => [d, DIFFICULTY_LABEL[d]]), setup.difficulty);
+    const map = select('mapId', BUILT_IN_MAPS.map((m) => [m.id, m.name]), setup.mapId);
+    const limits = CONFIG_LIMITS.targetScore;
+    const target = h('input', { type: 'number', value: String(setup.targetScore), min: limits.min, max: limits.max, data: { key: 'targetScore' } }) as HTMLInputElement;
+    const chosen = (): BotSetup => {
+      const score = Math.round(Number(target.value));
+      return {
+        bots: Number(bots.value),
+        difficulty: difficulty.value as Difficulty,
+        mapId: map.value,
+        targetScore: Number.isFinite(score) ? Math.min(limits.max, Math.max(limits.min, score)) : setup.targetScore,
+      };
+    };
+    for (const el of [bots, difficulty, map, target]) el.addEventListener('change', () => saveBotSetup(chosen()));
+    return h('div', { class: 'panel setup' }, [
+      h('h2', {}, ['Play vs bots']),
+      h('label', {}, ['Bots', bots]),
+      h('label', {}, ['Difficulty', difficulty]),
+      h('label', {}, ['Map', map]),
+      h('label', {}, ['Round wins to win', target]),
+      h('div', { class: 'row' }, [
+        h('button', {
+          class: 'primary',
+          on: {
+            click: () => {
+              const opts = chosen();
+              saveBotSetup(opts);
+              this.startLocalMatch(opts);
+            },
+          },
+        }, ['Start']),
+        h('button', {
+          on: {
+            click: () => {
+              this.settingUp = false;
+              this.draw();
+            },
+          },
+        }, ['Back']),
+      ]),
+      h('p', { class: 'hint' }, ['Every bot plays at the same level. Everyone fights everyone.']),
+    ]);
+  }
+
   private lobbyScreen(): HTMLElement {
     const v = this.view;
     const lobby = v.lobby;
     if (!lobby) return h('div', { class: 'panel' }, ['Joining…']);
     if (lobby.practice) return h('div', { class: 'panel' }, ['Starting practice…']);
-    if (this.local instanceof LocalMatchSession) return h('div', { class: 'panel' }, ['Starting the match…']);
+    if (this.local instanceof LocalMatchSession) {
+      // Normally shown for a moment; if the start failed (see the error), Home is the way out.
+      return h('div', { class: 'panel' }, ['Starting the match…', h('button', { on: { click: () => this.leave() } }, ['Home'])]);
+    }
     const me = lobby.players.find((p) => p.id === v.playerId);
     const isOwner = lobby.ownerId === v.playerId;
     const taken = new Set(lobby.players.filter((p) => p.id !== v.playerId).map((p) => p.skinId));
