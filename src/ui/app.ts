@@ -7,18 +7,18 @@ import { hudModel } from '../client/hud';
 import { InputSender } from '../client/inputSender';
 import { LocalSession } from '../client/localSession';
 import { backToLobby, initialView, playerName, reduce, type ClientView } from '../client/model';
-import type { Session } from '../client/session';
+import type { JoinTarget, Session } from '../client/session';
 import { bindKeyboard, type InputTarget, type KeyboardBinding } from '../input';
 import { CONFIG_LIMITS, NAME_MAX_LENGTH, type ClientMessage, type JoinRejectReason, type ServerMessage } from '../session/protocol';
 import { SKIN_PALETTE } from '../session/skins';
 import { h, option } from './dom';
 
-export type JoinTarget = { kind: 'create' } | { kind: 'join'; code: string };
 
 /** Opens a multiplayer session to the game server; null until the server exists (M2). */
 export type Connect = (name: string, target: JoinTarget) => Session;
 
 const NAME_KEY = 'bps.name';
+const LAST_ROOM_KEY = 'bps.lastRoom'; // per tab: a reload or a dropped connection can rejoin
 const ERROR_MS = 3000;
 
 const REJECT_TEXT: Record<JoinRejectReason, string> = {
@@ -48,6 +48,27 @@ function saveName(name: string): void {
 /** Colors come from the server; only palette names are ever applied to a style. */
 function skinColor(skinId: string): string {
   return SKIN_PALETTE.includes(skinId) ? skinId : '#888';
+}
+
+type LastRoom = { code: string; reconnectToken: string };
+
+function loadLastRoom(): LastRoom | null {
+  try {
+    const raw = sessionStorage.getItem(LAST_ROOM_KEY);
+    const v = raw ? (JSON.parse(raw) as Partial<LastRoom>) : null;
+    return v && typeof v.code === 'string' && typeof v.reconnectToken === 'string' ? { code: v.code, reconnectToken: v.reconnectToken } : null;
+  } catch {
+    return null;
+  }
+}
+
+function saveLastRoom(room: LastRoom | null): void {
+  try {
+    if (room) sessionStorage.setItem(LAST_ROOM_KEY, JSON.stringify(room));
+    else sessionStorage.removeItem(LAST_ROOM_KEY);
+  } catch {
+    // storage unavailable: rejoin after a reload just isn't offered
+  }
 }
 
 function formatTime(seconds: number): string {
@@ -92,6 +113,7 @@ export class App {
 
   leave(): void {
     void this.session?.send({ type: 'leave' });
+    if (!this.local) saveLastRoom(null); // leaving on purpose: nothing to rejoin
     this.detach();
     this.view = initialView();
     this.draw();
@@ -149,7 +171,12 @@ export class App {
       this.input?.reset(); // the new match's game starts with nobody moving
       this.keyboard.resync(); // …so re-send whatever direction is held right now
     }
-    if (msg.type === 'joinRejected') this.detach();
+    if (msg.type === 'roomJoined' && !this.local) saveLastRoom({ code: msg.code, reconnectToken: msg.reconnectToken });
+    if (msg.type === 'replaced') saveLastRoom(null); // the other tab owns this seat now
+    if (msg.type === 'joinRejected') {
+      if (msg.reason === 'badToken' || msg.reason === 'notFound') saveLastRoom(null);
+      this.detach();
+    }
     if (this.needsRedraw(before)) this.draw();
   }
 
@@ -199,10 +226,16 @@ export class App {
       if ((e as KeyboardEvent).key === 'Enter') join();
     });
 
+    const lastRoom = this.connect ? loadLastRoom() : null;
     return h('div', { class: 'panel home' }, [
       h('h1', {}, ['Browser Party Shooter']),
       h('label', {}, ['Name', nameInput]),
-      h('button', { class: 'primary', on: { click: () => this.startPractice(currentName()) } }, ['Practice']),
+      lastRoom
+        ? h('button', { class: 'primary', on: { click: () => this.startMultiplayer({ kind: 'rejoin', ...lastRoom }, currentName()) } }, [
+            `Rejoin room ${lastRoom.code}`,
+          ])
+        : null,
+      h('button', { class: lastRoom ? '' : 'primary', on: { click: () => this.startPractice(currentName()) } }, ['Practice']),
       h('button', { disabled: !this.connect, title: noServer, on: { click: () => this.startMultiplayer({ kind: 'create' }, currentName()) } }, ['Create game']),
       h('div', { class: 'row' }, [codeInput, h('button', { disabled: !this.connect, title: noServer, on: { click: join } }, ['Join'])]),
       h('button', { disabled: true, title: 'The level editor arrives in milestone M3.' }, ['Level editor']),

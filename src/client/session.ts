@@ -4,6 +4,9 @@
 
 import type { ClientMessage, ServerMessage } from '../session/protocol';
 
+/** How a multiplayer session enters its room. */
+export type JoinTarget = { kind: 'create' } | { kind: 'join'; code: string } | { kind: 'rejoin'; code: string; reconnectToken: string };
+
 export interface Session {
   send(msg: ClientMessage): void | Promise<void>;
   /** Returns an unsubscribe function. */

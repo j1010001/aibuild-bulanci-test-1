@@ -186,9 +186,11 @@ Accepted costs:
   additionally checks that no `server/` file imports browser-side code (`src/client`,
   `src/ui`, the renderer, input, camera). `npm run build` runs the core and server checks
   first; `npm run typecheck` runs all four configs.
-- The client finds the server through one setting, `VITE_SERVER_URL` (default
-  `ws://localhost:8787`). Moving the server to a real host means changing that value and
-  deploying; no code changes.
+- The client finds the server through one setting, `VITE_SERVER_URL`. When unset it
+  defaults to port 8787 on the host that served the page (`ws://<page host>:8787`, `wss`
+  under https), so other devices on the same network can join a locally hosted game.
+  Moving the server to a real host means setting that value and deploying; no code
+  changes.
 - The same `Room` runs behind the WebSocket adapter on the server, behind an in-memory
   adapter in tests, and in-process in the browser for practice.
 
@@ -667,7 +669,10 @@ is no peer-to-peer traffic.
   timer in `server/`; the room itself never owns a timer). Snapshots are sent at
   **30 Hz** (every second tick).
 - Clients **render snapshots only** — no client-side simulation and no prediction in v1.
-  The client interpolates positions between the last two snapshots for smoothness.
+  The client interpolates positions between the last two snapshots for smoothness
+  (`src/client/interpolate.ts`): it draws from the previous snapshot toward the latest over
+  one snapshot interval (33 ms) after the latest arrives, never interpolating across a new
+  round or for a player not alive in both, so respawns snap instead of sliding.
 - Determinism serves unit-testability and reliable replays (AI testing); it is not needed
   for client correctness, because only the server simulates.
 - Solo **practice** runs a `Room` in-process in the browser, driven by the page's own
@@ -787,8 +792,13 @@ the default is a map whose author never chose.
 - **Everyone leaves**: the server discards the room once no player is connected, calling
   `Room.dispose()`, which ends any running match and frees its physics world. (A practice
   room would otherwise never end on its own.)
-- **Server unreachable or connection lost**: the client shows a notice and offers to
-  retry `rejoin` with its `reconnectToken`, or return to home.
+- **Server unreachable or connection lost**: the client returns to the home screen with a
+  "Disconnected" notice. The room code and reconnect token are kept per tab
+  (`sessionStorage`), so the home screen offers "Rejoin room CODE" — also after a page
+  reload. A rejoin the server refuses (`badToken`, `notFound`) clears it, as does leaving
+  on purpose or being replaced by another tab. Note that in a two-player match a drop
+  ends the match at once (§10), so there is nothing to rejoin; with three or more
+  players the match continues and the rejoin restores the player.
 - **No fair-spawn board**: editor blocks/warns at save; runtime falls back to edge-margin
   placement rather than hanging.
 - **Shoot before any move**: use the spawn default facing.

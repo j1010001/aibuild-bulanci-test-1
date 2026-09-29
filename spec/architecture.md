@@ -24,7 +24,7 @@ flowchart LR
     Input["Keyboard input<br/>src/input.ts (built)"]
     Camera["Camera<br/>src/camera.ts (built)"]
     Renderer["Renderer<br/>src/render.ts (built)"]
-    NetClient["Network client<br/>src/net/client.ts (M2)"]
+    NetClient["Network client<br/>src/net/client.ts (built)"]
     Editor["Level editor<br/>src/editor (M3)"]
     PracticeRoom["Practice: LocalSession<br/>src/client (built)"]
   end
@@ -40,9 +40,9 @@ flowchart LR
   end
 
   subgraph Server["Game server (Node only)"]
-    WS["HTTP + WebSocket adapter<br/>server/wsAdapter.ts (M2)"]
-    Registry["Room registry + codes<br/>server/rooms.ts (M2)"]
-    Loop["60 Hz tick loop<br/>server/loop.ts (M2)"]
+    WS["HTTP + WebSocket + ConnectionHandler<br/>server/server.ts, connection.ts (built)"]
+    Registry["Room registry + codes<br/>server/rooms.ts (built)"]
+    Loop["60 Hz tick loop<br/>server/loop.ts (built)"]
   end
 
   Bot["Headless bot<br/>scripts/bot.ts (M2)"]
@@ -80,8 +80,8 @@ flowchart LR
 | **Map loader** | The one entry point for every map (built-in, preset, import, received by the server): version check, defaults, hard constraints. | `src/sim/mapFormat.ts` | M0 |
 | **GameApi** | A control surface over one game: roster, `start({seed})`, `setMoveDir` / `pressShoot`, `tick` / `runTicks`, `getState` / `getEvents`, `pause` / `resume`. A Room and AI harnesses call the same methods. Exposed as `window.GameAPI` during practice. | `src/api.ts` | built |
 | **Room** | The session: lobby (roster, owner, unique skins, ready, map, config, start gate), match lifecycle, input latching, disconnect/reconnect, ownership transfer. Emits protocol messages. Time is injected; it never owns a timer. | `src/session/room.ts`, `protocol.ts`, `maps.ts` | built |
-| **Game server** | Node shell: WebSocket connections, room codes, a drift-corrected 60 Hz loop per room, snapshots at 30 Hz, reconnect tokens, empty-room cleanup. The only place Node APIs are allowed. | `server/*` | M2 |
-| **Network client** | A `Session` over WebSocket: connects, sends `createRoom`/`joinRoom`/`rejoin` and client messages, delivers server messages, reports the close. Stale-snapshot discard lives in the client model; interpolation between the last two snapshots is applied before rendering. | `src/net/client.ts` | M2 |
+| **Game server** | Node shell: WebSocket connections (per-socket size, rate and failed-join limits; connection and room caps; heartbeat), room codes, one drift-corrected 60 Hz loop for all rooms, empty-room cleanup. The only place Node APIs are allowed. | `server/*` | built |
+| **Network client** | A `Session` over WebSocket: connects, sends `createRoom`/`joinRoom`/`rejoin` and client messages, delivers server messages, reports the close. Stale-snapshot discard lives in the client model; interpolation between the last two snapshots is applied before rendering. | `src/net/client.ts`, `src/client/interpolate.ts` | built |
 | **Renderer** | three.js scene as a pure function of a `RenderState`. Fixed tilted camera, framing computed from board size; obstacle meshes from Geometry. (The HUD is a DOM overlay, see UI screens.) | `src/render.ts` | built |
 | **Camera + Input** | Camera azimuth is the source of truth. Arrow and IJKL key mappings are derived from it (§8), then turned into `{moveDir, shoot}`. | `src/camera.ts`, `src/input.ts` | built |
 | **Client model** | Pure fold of server messages into the ClientView (screens, lobby, match, snapshots, result), the HUD model, the `InputSender`, the `Session` interface and `LocalSession` (practice), and the chase-and-shoot bot strategy. DOM-free, so it is unit-tested. | `src/client/*` | built |
