@@ -61,6 +61,13 @@ describe('Room lobby: joining', () => {
     expect(room.join('Cy', () => {})).toEqual({ ok: false, reason: 'full' });
   });
 
+  it('holds up to 8 players by default and never more, whatever is asked for (M0 task 4)', () => {
+    for (const room of [newRoom(), newRoom({ maxPlayers: 12 })]) {
+      for (let i = 0; i < 8; i++) join(room, `P${i}`);
+      expect(room.join('Ninth', () => {})).toEqual({ ok: false, reason: 'full' });
+    }
+  });
+
   it('exposes the built-in map catalog and default settings', () => {
     const room = newRoom();
     const lobby = last(join(room, 'Ann'), 'lobby');
