@@ -2,7 +2,8 @@
 // model and InputSender the UI uses, so a room of bots exercises the real client path.
 // Here the bots share one in-memory Room (InProcessSession) and time is ticked by hand.
 
-import { beforeAll, describe, expect, it } from 'vitest';
+import { afterEach, beforeAll, describe, expect, it, vi } from 'vitest';
+import { BotBrain } from '../../src/client/bots/brain';
 import { BotPlayer } from '../../src/client/botPlayer';
 import { InProcessSession } from '../../src/client/inProcessSession';
 import { ensureRapierReady } from '../../src/physics/rapier';
@@ -291,8 +292,8 @@ function matchWith(session: ScriptedSession, me: { x: number; y: number; facing:
       roundNumber: 1,
       scores: { a: 0, b: 0 },
       players: [
-        { id: 'a', name: 'A', skinId: 'crimson', pos: { x: meAt.x, y: meAt.y }, facing: meAt.facing, lastShotAt: 0, alive, connected: true },
-        { id: 'b', name: 'B', skinId: 'gold', pos: target, facing: '+X', lastShotAt: 0, alive: true, connected: true },
+        { id: 'a', name: 'A', skinId: 'crimson', pos: { x: meAt.x, y: meAt.y }, facing: meAt.facing, lastShotAt: -Infinity, alive, connected: true }, // never fired, as the sim starts
+        { id: 'b', name: 'B', skinId: 'gold', pos: target, facing: '+X', lastShotAt: -Infinity, alive: true, connected: true },
       ],
       bullets: [],
       time: 0,
@@ -349,5 +350,25 @@ describe('BotPlayer: getting unstuck', () => {
     const bot = new BotPlayer(session);
     session.drop('connection lost');
     expect(bot.closedReason).toBe('connection lost');
+  });
+});
+
+describe('BotPlayer: input throttling (review of M2.5 task 2, finding 4)', () => {
+  afterEach(() => {
+    vi.restoreAllMocks();
+  });
+
+  it('holding a direction does not delay the next change: a turn is sent on the step it is decided', () => {
+    const decisions: (Direction | null)[] = ['+X', '+X', '-Y'];
+    let k = 0;
+    vi.spyOn(BotBrain.prototype, 'decide').mockImplementation(() => ({ moveDir: decisions[Math.min(k++, decisions.length - 1)]!, shoot: false }));
+    const session = new ScriptedSession();
+    const bot = new BotPlayer(session, { seed: 1 });
+    const snap = matchWith(session, { x: 10, y: 10, facing: '+X' }, { x: 30, y: 30 }, []);
+    snap();
+    // +X is sent at 100 ms. Repeating it at 160 ms sends nothing, so it must not restart the
+    // 50 ms throttle: the turn decided at 176 ms (76 ms after the last send) goes out at once.
+    for (const t of [100, 160, 176]) bot.step(t);
+    expect(session.moves()).toEqual(['+X', '-Y']);
   });
 });

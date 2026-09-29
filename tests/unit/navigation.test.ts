@@ -244,3 +244,15 @@ describe('NavGrid: review follow-ups', () => {
     expect(right[0]!.y).toBeCloseTo(5.25);
   });
 });
+
+describe('NavGrid: the nearest reachable place (review of M2.5 task 2, finding 1)', () => {
+  it('with orNearest, a goal a player fits in but no path reaches gives a path to the reachable spot nearest it', () => {
+    const grid = NavGrid.build(mapOf([]), CONFIG);
+    const goal = { x: 0.8, y: 30.1 }; // against the west edge: entered only by facing the edge, which the gun can't
+    expect(grid.findPath({ x: 20.25, y: 10.25 }, goal)).toBeNull();
+    const path = grid.findPath({ x: 20.25, y: 10.25 }, goal, undefined, true)!;
+    expect(path).not.toBeNull();
+    const end = path.at(-1)!;
+    expect(Math.hypot(end.x - goal.x, end.y - goal.y)).toBeLessThan(1.2);
+  });
+});

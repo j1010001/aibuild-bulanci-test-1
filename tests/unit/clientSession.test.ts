@@ -13,6 +13,13 @@ beforeAll(async () => {
 });
 
 describe('InputSender', () => {
+  it('setMoveDir reports whether it sent anything (review of M2.5 task 2, finding 4)', () => {
+    const input = new InputSender(() => {});
+    expect(input.setMoveDir('+X')).toBe(true);
+    expect(input.setMoveDir('+X')).toBe(false);
+    expect(input.setMoveDir(null)).toBe(true);
+  });
+
   it('sends a movement change once, not on every repeated call', () => {
     const sent: ClientMessage[] = [];
     const input = new InputSender((m) => sent.push(m));

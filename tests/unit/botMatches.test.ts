@@ -16,14 +16,19 @@ beforeAll(async () => {
 });
 
 /** Plays one bot-only match to the end; returns the winner's name (null = no winner). */
-async function match(opts: { seed: number; mapId: string; targetScore: number; bots: { name: string; difficulty: Difficulty }[] }, maxSeconds = 600): Promise<string | null> {
+/** Plays one bot-only match to the end; returns the winner's name (null = no winner) and how many rounds ended with nobody winning. */
+async function played(opts: { seed: number; mapId: string; targetScore: number; bots: { name: string; difficulty: Difficulty }[] }, maxSeconds = 600): Promise<{ winner: string | null; draws: number }> {
   const room = new Room({ code: 'ABCDE', seed: opts.seed });
+  let draws = 0;
   const bots = opts.bots.map((b, i) => {
     const session = new InProcessSession(room, i === 0 ? { kind: 'create' } : { kind: 'join', code: 'ABCDE' }, b.name);
     const bot = new BotPlayer(session, {
       difficulty: b.difficulty,
       seed: opts.seed * 100 + i,
       host: i === 0 ? { mapId: opts.mapId, targetScore: opts.targetScore } : undefined,
+    });
+    if (i === 0) session.onMessage((m) => {
+      if (m.type === 'event' && m.event.kind === 'roundEnd' && m.event.winnerId === null) draws++;
     });
     bot.connect();
     return bot;
@@ -33,7 +38,7 @@ async function match(opts: { seed: number; mapId: string; targetScore: number; b
     const host = bots[0]!;
     if (host.results.length > 0) {
       const winner = host.results[0]!.winnerId;
-      return winner === null ? null : (host.view.match?.players.find((p) => p.id === winner)?.name ?? winner);
+      return { winner: winner === null ? null : (host.view.match?.players.find((p) => p.id === winner)?.name ?? winner), draws };
     }
     for (const b of bots) b.step(now);
     if (bots.some((b) => b.view.screen === 'lobby')) await new Promise((r) => setTimeout(r, 0));
@@ -43,51 +48,52 @@ async function match(opts: { seed: number; mapId: string; targetScore: number; b
   throw new Error(`match (seed ${opts.seed}, ${opts.mapId}) did not finish in ${maxSeconds} simulated seconds`);
 }
 
+async function match(opts: Parameters<typeof played>[0]): Promise<string | null> {
+  return (await played(opts)).winner;
+}
+
 describe('bot-only matches finish on every map, at every difficulty', () => {
   const cases = BUILT_IN_MAPS.flatMap((m) => (['easy', 'normal', 'hard'] as const).map((d) => [m.id, d] as const));
   it.each(cases)('%s, %s: three bots play a match to a winner', async (mapId, difficulty) => {
-    const winner = await match({
-      seed: 7,
-      mapId,
-      targetScore: 2,
-      bots: ['A', 'B', 'C'].map((name) => ({ name, difficulty })),
-    });
-    expect(winner).not.toBeNull();
+    // Two seeds each; no round may run out the clock (bots that can't reach each other).
+    for (const seed of [7, 8]) {
+      const { winner, draws } = await played({ seed, mapId, targetScore: 2, bots: ['A', 'B', 'C'].map((name) => ({ name, difficulty })) });
+      expect(winner).not.toBeNull();
+      expect(draws).toBe(0);
+    }
   }, 60_000);
 });
 
 describe('difficulty levels mean something', () => {
-  it('over 20 seeded one-on-one matches on the Arena, a hard bot beats an easy bot in most of them', async () => {
-    let hardWins = 0;
-    for (let seed = 1; seed <= 20; seed++) {
+  /** One-on-one matches on the Arena, seats alternating; how many the first level wins. */
+  async function wins(better: Difficulty, worse: Difficulty, seeds: number): Promise<number> {
+    let won = 0;
+    for (let seed = 1; seed <= seeds; seed++) {
+      const first = seed % 2 === 1;
       const winner = await match({
         seed,
         mapId: 'default',
         targetScore: 3,
-        bots: [
-          { name: seed % 2 ? 'Hard' : 'Easy', difficulty: seed % 2 ? 'hard' : 'easy' },
-          { name: seed % 2 ? 'Easy' : 'Hard', difficulty: seed % 2 ? 'easy' : 'hard' },
-        ],
+        bots: first
+          ? [{ name: 'Better', difficulty: better }, { name: 'Worse', difficulty: worse }]
+          : [{ name: 'Worse', difficulty: worse }, { name: 'Better', difficulty: better }],
       });
-      if (winner === 'Hard') hardWins++;
+      if (winner === 'Better') won++;
     }
-    expect(hardWins).toBeGreaterThanOrEqual(15);
-  }, 180_000);
+    return won;
+  }
 
-  it('and a normal bot beats an easy bot more often than not', async () => {
-    let normalWins = 0;
-    for (let seed = 1; seed <= 10; seed++) {
-      const winner = await match({
-        seed,
-        mapId: 'default',
-        targetScore: 3,
-        bots: [
-          { name: 'Normal', difficulty: 'normal' },
-          { name: 'Easy', difficulty: 'easy' },
-        ],
-      });
-      if (winner === 'Normal') normalWins++;
-    }
-    expect(normalWins).toBeGreaterThanOrEqual(6);
-  }, 120_000);
+  // Thresholds sit about two standard deviations below rates measured over 60+ seeds, so
+  // they catch a level that stopped meaning something without flipping on a reseed.
+  it('over 30 seeded matches, a hard bot beats an easy bot in nearly all of them', async () => {
+    expect(await wins('hard', 'easy', 30)).toBeGreaterThanOrEqual(25);
+  }, 240_000);
+
+  it('a normal bot beats an easy bot in most', async () => {
+    expect(await wins('normal', 'easy', 30)).toBeGreaterThanOrEqual(22);
+  }, 240_000);
+
+  it('a hard bot beats a normal bot more often than not', async () => {
+    expect(await wins('hard', 'normal', 30)).toBeGreaterThanOrEqual(18);
+  }, 240_000);
 });
