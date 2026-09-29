@@ -1,7 +1,8 @@
 # Browser Party Shooter — Design Specification
 
 Date: 2026-09-15
-Status: approved (design review)
+Status: approved (design review). Revised 2026-09-29: server authority moved into v1
+scope (§3, §4, §12, §14). The sequencing plan is `spec/2026-09-29-v1-milestones.md`.
 
 ## 1. Overview
 
@@ -12,8 +13,8 @@ single hit kills. A match is a score race of rounds.
 
 The deliverable has two integrated pieces:
 
-1. **Game** — real-time multiplayer; a host generates a short room code that friends use
-   to join.
+1. **Game** — real-time multiplayer; a player creates a room on the game server, which
+   issues a short room code that friends use to join.
 2. **Level editor** — built into the same app; author maps with predefined primitives,
    save them locally (immediately available in the game's map picker), and share them via
    JSON import/export.
@@ -57,16 +58,24 @@ Canonical vocabulary used consistently throughout.
   between its pillars, open at every height below the lintel (or all the way up, if there
   is no lintel).
 - **State** — the authoritative game state owned by the simulation (see Data model).
-- **Snapshot** — a broadcast `{ type:'snapshot', seq, state }` from the host to clients.
-- **Host** — the authority that runs the simulation; v1 this is the host's browser.
-- **Server authority** — the later relocation of the simulation to a server process (out
-  of scope v1).
+- **Snapshot** — a broadcast `{ type:'snapshot', seq, state }` from the server to clients,
+  carrying only dynamic state (the static map is sent once, in `matchStart` — §12).
+- **Server** — the game server process. It is the authority: it runs the simulation for
+  every room. Clients never simulate; they send input and render snapshots.
+- **Room** — one lobby-then-match session on the server, identified by its room code.
+- **Room owner** — the player who created the room (or inherited it, §14). Chooses the
+  map and config and starts the match. Has no simulation role; the server is the authority.
+- **Server authority** — the simulation runs on the server, not in any player's browser
+  (in scope for v1 since the 2026-09-29 revision; see §4 for why).
 
 ## 3. Scope
 
 ### In scope (v1)
 
-- Host-authoritative multiplayer (the host's browser runs the simulation).
+- Server-authoritative multiplayer: a game server runs the simulation for every room;
+  browsers are thin clients. Built and tested against a local server first, deployed
+  only once it works (§4 isolation rule).
+- Solo practice runs entirely in the browser, with no server.
 - Real-time, axis-aligned movement and shooting.
 - One-hit-kill traveling bullets with a fire cadence.
 - Four primitives (cube, cone, donut, arch), each a real 3D collision shape (§7) able to
@@ -80,9 +89,10 @@ Canonical vocabulary used consistently throughout.
 ### Out of scope (v1)
 
 - Board/camera rotation — deferred (was discussed; removed to reduce scope).
-- Server authority — deferred. The design keeps the simulation core portable so a server
-  can replace the browser host later without rewriting game logic.
-- Client-side prediction / rollback — clients render snapshots only.
+- Client-side prediction / rollback — clients render snapshots only. (With server
+  authority every player's input waits a round trip to the server; if that feels laggy
+  in playtests, predicting only the local player's own movement is the first addition.)
+- Peer-to-peer / WebRTC networking — replaced by server authority (§4).
 - Teams, respawn deathmatch, power-ups, projectiles with varying height, destructible
   obstacles.
 - Custom skin assets or patterns (colors only).
@@ -93,10 +103,11 @@ Each unit has one job and a well-defined interface.
 
 | Unit | Responsibility | Depends on |
 |---|---|---|
-| **Simulation core (`sim`)** | TypeScript. Owns game state, applies inputs per tick, emits events. No DOM, no three.js, no WebRTC. Deterministic given the same physics world contents (see below). | `physics` |
+| **Simulation core (`sim`)** | TypeScript. Owns game state, applies inputs per tick, emits events. No DOM, no three.js rendering, no networking. Deterministic given the same physics world contents (see below). | `physics` |
 | **Physics world (`physics`)** | A real 3D collision world (Rapier — see §7) built once per game from the map's obstacles. Answers every collision question `sim` asks: can this player move this far, does the gun fit, what does this bullet hit. The one genuinely stateful, non-serializable part of an otherwise-plain `State` (excluded from `GameApi.getState()`'s snapshot). | nothing (a pure geometry/query engine) |
-| **Session host** | Runs `sim`, ingests inputs from clients, broadcasts snapshots and events. v1 = the host's browser; later = a server process running the same `sim`. | sim |
-| **Networking** | WebRTC data channels between host and peers, plus a thin stateless signaling service that maps the room code to the room. Never touches game state. | — |
+| **Session (`session`)** | The `Room`: lobby state (roster, owner, skins, ready flags, map, config, start gate), the match lifecycle, per-player input with shoot edges latched until the next tick, disconnect/reconnect and ownership transfer. Drives `sim` through `GameApi`. Its output is a stream of protocol messages (§12). Environment-free: time is injected (it never owns a timer), so the same class runs on the server, in tests, and in the browser for practice. | sim |
+| **Server (`server/`)** | A thin Node shell around `session`: HTTP + WebSocket, the room-code registry, the fixed-rate 60 Hz tick timer, the process entry point. The only unit allowed to use Node APIs. Never imports client/UI code. | session |
+| **Network client** | Browser WebSocket client: sends input, receives snapshots/events, drops stale snapshots, interpolates between snapshots for the renderer. Never touches game rules. | session protocol types |
 | **Renderer** | three.js scene. Pure function of a state snapshot: plane, obstacles, players, bullets. Obstacle meshes are built from the same `buildObstacleGeometry` output `physics` turns into colliders (§7, §11) — not a separately-tuned visual model. | sim (read-only) |
 | **Input** | Keyboard → normalized `{ moveDir, shoot }`. Holds no state. | — |
 | **Editor** | Author maps; persist locally; JSON import/export. Shares primitive definitions with `sim`. | sim definitions |
@@ -121,6 +132,41 @@ still visible) without disabling `tick()`/`runTicks()` themselves, which always 
 called. A harness driving the live page should call `pause()` first; a harness driving a
 freshly-constructed `GameApi` (e.g. in a test) never needs to, since nothing else is
 ticking it.
+
+### Why server authority (revised 2026-09-29)
+
+v1 originally had the host's browser run the simulation, connected to peers over WebRTC,
+with a signaling server brokering connections. Since a server was needed anyway, it now
+runs the simulation itself:
+
+- It removes WebRTC entirely, and with it STUN/TURN and the NAT-traversal failures that
+  were the riskiest part of the networking work.
+- No host advantage: in the browser-host model the host played with zero latency and
+  everyone else didn't.
+- A match no longer has to end when one particular player leaves (§14).
+
+Accepted costs:
+- Every player's input waits a round trip to the server (no prediction in v1, §3).
+- WebSocket runs over TCP, so one lost packet stalls the snapshots queued behind it. The
+  transport sits behind an interface so WebTransport can replace it if playtests show
+  stalls.
+- Hosting cost grows with concurrent matches (one 60 Hz simulation per active room).
+
+### Isolation rule (so the server can move to any host unchanged)
+
+- `sim`, `physics`, `geometry` and `session` are **shared, environment-free code**: no DOM,
+  no Node APIs, and time is injected rather than read. (`three` is used only for pure
+  geometry math, which runs in Node.)
+- `server/` is the **only** place Node APIs are allowed, and it never imports client/UI
+  code.
+- Enforced by compilation, not convention: `server/` has its own tsconfig with no `dom`
+  lib that includes only `server/` plus the shared folders, so an accidental DOM or
+  client import fails to compile. The client tsconfig excludes `server/`.
+- The client finds the server through one setting, `VITE_SERVER_URL` (default
+  `ws://localhost:8787`). Moving the server to a real host means changing that value and
+  deploying; no code changes.
+- The same `Room` runs behind the WebSocket adapter on the server, behind an in-memory
+  adapter in tests, and in-process in the browser for practice.
 
 ## 5. Coordinate system and world units
 
@@ -433,11 +479,12 @@ replaced.
 - **Disconnect**: a disconnected player is inert (not a target) and cannot score. If that
   leaves fewer than two connected players, the match ends without a winner, as above — the
   round is not resolved as a draw, because another round would have nobody in it.
-  The **session host** is what marks a player disconnected: it is the only component that
-  knows the network dropped. It sets `connected` to false on the state it holds and calls
-  `step` as usual; `sim` applies every consequence above. The fact comes from the host, the
-  rules stay in `sim` — which is why `sim` needs no function for this, and why the rules are
-  not duplicated in two places that can drift apart.
+  The **room** (`session`, running on the server) is what marks a player disconnected: the
+  server tells it when a player's connection drops, since it's the only component that
+  knows. The room sets `connected` to false on the state it holds and calls `step` as usual;
+  `sim` applies every consequence above. The fact comes from the room, the rules stay in
+  `sim` — which is why `sim` needs no function for this, and why the rules are not
+  duplicated in two places that can drift apart.
 
 ## 11. Rendering
 
@@ -529,40 +576,64 @@ replaced.
 
 ## 12. Networking
 
+The server is authoritative (§4). Every client holds one WebSocket connection to it; there
+is no peer-to-peer traffic.
+
 ### Rooms and flow
 
-1. Host: "Create game" → choose map + config → app requests a short room code (5–6 chars)
-   from the signaling service.
-2. Peers: "Join game" → enter code → signaling brokers WebRTC SDP/ICE between each peer
-   and host.
-3. Lobby: the session host keeps the roster, skin choices and ready flags itself and
-   broadcasts them as a `lobby` message. **No game exists yet** — `createGame` is not called
-   until the host starts the match, so there is no `State` and nothing to snapshot. The
-   lobby is a room, not a game.
-4. Play: the host calls `createGame` with the final roster and `sim` becomes authoritative;
-   peers render snapshots only. **The roster is fixed from this moment.** Nobody joins a
-   match in progress; a player who drops is marked disconnected (§10) rather than removed,
-   so their score survives and they can return.
+1. **Create**: "Create game" → the client sends `createRoom`. The server creates a `Room`,
+   makes the creator its **owner**, and replies with a short room code (5–6 characters from
+   an unambiguous alphabet), the creator's `playerId` and a `reconnectToken`.
+2. **Join**: "Join game" → enter the code → `joinRoom`. The server replies with a
+   `playerId` and `reconnectToken`, or rejects the join if the code is unknown, the room is
+   full (`maxPlayers`), or a match is in progress.
+3. **Lobby**: the room keeps the roster, skin choices (unique per room), ready flags, map and
+   config, and broadcasts them as a `lobby` message on every change. Only the owner changes
+   the map and config and starts the match; the start gate (§14) applies. **No game exists
+   yet**: `createGame` is not called until the owner starts the match, so there is no
+   `State` and nothing to snapshot. The lobby is a room, not a game.
+4. **Play**: on start, the room validates the map (the same loader the editor and
+   import use), calls `createGame` with the final roster, and sends `matchStart` with the
+   map and config once. **The roster is fixed from this moment.** Nobody joins a match in
+   progress; a player who drops is marked disconnected (§10) rather than removed, so their
+   score survives, and they can return with their `reconnectToken` (`rejoin`) to get the
+   same `playerId` back.
+5. **After the match**: when `phase` becomes `matchEnd`, the room returns to the lobby with
+   the same roster (minus anyone who left), so the owner can start a rematch.
 
 ### Authority and timing
 
-- Host runs `sim` at a **60 Hz fixed timestep**. Snapshots broadcast at **30 Hz**.
+- The server runs each room's `sim` at a **60 Hz fixed timestep** (a drift-corrected
+  timer in `server/`; the room itself never owns a timer). Snapshots are sent at
+  **30 Hz** (every second tick).
 - Clients **render snapshots only** — no client-side simulation and no prediction in v1.
-  Client interpolates positions between snapshots for smoothness.
-- Determinism requirement serves unit-testability and the later server-authority swap; it
-  is not needed for client correctness because only the host simulates.
+  The client interpolates positions between the last two snapshots for smoothness.
+- Determinism serves unit-testability and reliable replays (AI testing); it is not needed
+  for client correctness, because only the server simulates.
+- Solo **practice** runs a `Room` in-process in the browser, driven by the page's own
+  loop, with no server and no network.
 
 ### Protocol
 
-| Direction | Message | Channel |
-|---|---|---|
-| client → host | `{ type:'input', seq, moveDir, shoot }` | reliable, ordered |
-| host → clients | `{ type:'lobby', players, ready }` — before the match starts only | reliable |
-| host → clients | `{ type:'snapshot', seq, state }` — after it starts only | unreliable, ordered |
-| host → clients | `{ type:'event', kind }`, `kind ∈ {playerJoined, playerLeft, roundStart, roundEnd, matchEnd, hostLeft}` | reliable |
+All messages travel over the one WebSocket, which is reliable and ordered (TCP). Message
+types live in `src/session/protocol.ts`, shared by client and server.
 
-- Clients discard snapshots with `seq` older than the latest received.
-- `shoot` as an edge guarantees no trigger is lost.
+| Direction | Message | When |
+|---|---|---|
+| client → server | `createRoom`, `joinRoom { code }`, `rejoin { code, reconnectToken }` | connecting |
+| client → server | `setSkin`, `setReady`; owner only: `setMap`, `setConfig`, `startMatch` | lobby |
+| client → server | `{ type:'input', seq, moveDir, shoot }` | match |
+| server → client | `roomJoined { code, playerId, reconnectToken }` or `joinRejected { reason }` | connecting |
+| server → client | `{ type:'lobby', players, ownerId, map, config }` | lobby, on every change |
+| server → client | `{ type:'matchStart', map, config, players }` — the static map, sent once | match start |
+| server → client | `{ type:'snapshot', seq, state }` — dynamic state only (players, bullets, scores, phase, round, time) | 30 Hz during the match |
+| server → client | `{ type:'event', event }`, `kind ∈ {playerJoined, playerLeft, ownerChanged, roundStart, roundEnd, matchEnd}` | as they happen |
+
+- Clients discard snapshots with `seq` older than the latest received (defensive; TCP keeps
+  order, but a reconnect can replay).
+- `shoot` is an edge and the room latches it until the next tick, so no trigger is lost
+  even when an input message arrives between ticks.
+- Input is sent only when it changes.
 
 ## 13. Level editor
 
@@ -610,13 +681,20 @@ the default is a map whose author never chose.
 
 ## 14. Edge cases and error handling
 
-- **Host leaves**: emit `hostLeft`; show notice; return to home. Accepted v1 tradeoff
-  (server authority is the later fix).
+- **Room owner leaves**: ownership passes to the next connected player (in join order)
+  and the room emits `ownerChanged`; a match in progress continues. The §10 rule still
+  applies: if fewer than two connected players remain, the match ends without a winner.
+  (This replaces v1's original "host leaves → everyone returns home", which only existed
+  because the host's browser ran the simulation.)
+- **Everyone leaves**: the server discards the room once no player is connected.
+- **Server unreachable or connection lost**: the client shows a notice and offers to
+  retry `rejoin` with its `reconnectToken`, or return to home.
 - **No fair-spawn board**: editor blocks/warns at save; runtime falls back to edge-margin
   placement rather than hanging.
 - **Shoot before any move**: use the spawn default facing.
 - **Concurrent same-tick deaths**: all resolved in one tick, no ordering bias.
-- **<2 connected peers**: host cannot start unless "practice" (solo) is selected.
+- **<2 connected players**: the owner cannot start the match; solo play is "practice",
+  which runs in the browser without a room on the server.
 - **Empty map**: valid; spawn fairness still applies on the open plane.
 - **Bullet vs bullet**: no interaction.
 - **Turning into a wall or player**: refused while the gun would not fit (§8).
@@ -663,8 +741,13 @@ the default is a map whose author never chose.
   (a real hollow shape), not a box or an undistorted-but-wrong torus
   (`obstacleMesh.test.ts`).
 - **Editor**: map round-trip (`save → export → import` ⇒ identical params).
-- **Networking**: two-tab smoke test — create code → join → shoot → death → round →
-  match.
+- **Networking** (planned, M2 in `spec/2026-09-29-v1-milestones.md`):
+  - `Room` integration through an in-memory adapter: several clients through join →
+    lobby → shoot → death → round → match; disconnect/reconnect; owner leaves.
+  - Real-socket integration against a server started in the test.
+  - A two-tab browser smoke test against the local server: create code → join → shoot →
+    death → round → match.
+  - The server compiles under its own no-DOM tsconfig (the §4 isolation rule).
 - **Camera/input alignment** (pure, unit-tested — the one part of "rendering" that isn't
   just a visual smoke test, because it's a correctness property, not a look-and-feel
   one): every world `Direction` classifies as exactly one screen direction under the

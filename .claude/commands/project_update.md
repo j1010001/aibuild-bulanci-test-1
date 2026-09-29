@@ -52,7 +52,14 @@ $ARGUMENTS
    In every case, spec and code must describe the same behavior when you're done. Never
    leave them disagreeing.
 
-4. **Fix the underlying cause, not just its symptom.** If the bug came from two places
+4. **Write the regression test before the fix (test-first, see `CLAUDE.md`).** Add a
+   test in `tests/unit/` that reproduces the report and fails on the current, broken
+   code. Run it and confirm it fails for the reason you stated in step 2 — a test that
+   passes before the fix proves nothing. Prefer testing a pure invariant derived from
+   the single source of truth (see `tests/unit/camera.test.ts`) over hardcoding both
+   sides of a check that can drift apart the same way the bug did.
+
+5. **Fix the underlying cause, not just its symptom.** If the bug came from two places
    independently hardcoding values that must stay in sync — as the camera's azimuth and
    the keyboard's direction mapping did — extract a single source of truth and derive
    the second value from the first (see `src/camera.ts` and how `src/input.ts` now
@@ -60,17 +67,12 @@ $ARGUMENTS
    A fix that removes the class of bug is worth more than one that removes this
    instance of it.
 
-5. **Update the spec.** Edit
+6. **Update the spec.** Edit
    `spec/2026-09-15-browser-party-shooter-design.md` directly — this is the one design
    document; do not create a new file. Cross-reference the sections involved. If the
    bug is subtle or the wrong assumption was easy to make, add a short note explaining
    what broke and why the new rule prevents it (see §8/§11's azimuth notes for the
    model to follow).
-
-6. **Add or update regression tests in `tests/unit/`.** Every fix lands with a test
-   that would have failed on the old, broken behavior. Prefer testing a pure invariant
-   derived from the single source of truth (see `tests/unit/camera.test.ts`) over
-   hardcoding both sides of a check that can drift apart the same way the bug did.
 
 7. **Verify before declaring done — all of these, not a subset:**
    - `npx tsc --noEmit`
