@@ -761,8 +761,9 @@ learning, no language model):
   `MIN_BOT_DOOR_WIDTH` (1.7) may be unplannable wherever they sit on the grid.
 - **Decisions — utility AI**: every `thinkMs` it scores dodge 1.0 · evade 0.95 · attack
   0.9 · chase 0.5 · wander 0.1 and does the best available. *Dodge*: step aside from the
-  soonest bullet that will pass through it (one roll and one side per bullet, only until
-  it is out of the path). *Evade*: step out of an enemy's firing line when it can't fire
+  soonest bullet that will pass through it (one roll and one side per bullet — the side
+  it is already on when there's room — stepping just far enough to clear the path, and not
+  walking back into it until the bullet has passed). *Evade*: step out of an enemy's firing line when it can't fire
   first. *Attack*: lined up on a target within its aim and with a clear line of fire
   (walls lower than bullet height don't count), face it — backing off first when the gun
   wouldn't fit on the turn — then fire after a reaction delay, when its gun is ready by

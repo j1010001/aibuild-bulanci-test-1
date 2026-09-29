@@ -88,6 +88,7 @@ export class BotBrain {
   private dodgeRolls = new Map<string, Direction | false>(); // per bullet: the side it steps to, or no dodge
   private planFailedAt = -Infinity;
   private round = -1;
+  private bullets: Bullet[] = []; // this decision's snapshot bullets
   private evadeRolledAt = -Infinity;
   private anchor: { pos: Vec2; at: number } | null = null;
 
@@ -134,8 +135,12 @@ export class BotBrain {
     }
     const enemies = state.players.filter((p) => p.id !== meId && p.alive && p.connected);
 
-    // A dodge ends as soon as that bullet can no longer hit.
-    if (this.maneuver?.kind === 'dodge' && this.incoming(state.bullets, me)?.id !== this.maneuver.bulletId) this.maneuver = null;
+    // A dodge runs its planned length, or ends early once that bullet is gone or past.
+    this.bullets = state.bullets;
+    if (this.maneuver?.kind === 'dodge') {
+      const b = state.bullets.find((x) => x.id === this.maneuver!.bulletId);
+      if (!b || !approaching(b, me)) this.maneuver = null;
+    }
 
     if (now - this.lastThink >= this.profile.thinkMs) {
       this.lastThink = now;
@@ -178,13 +183,16 @@ export class BotBrain {
     if (bullet) {
       let side = this.dodgeRolls.get(bullet.id);
       if (side === undefined) {
-        side = nextRandom(this.rng) < dodgeChance ? this.sideToStep(me, bullet.dir) : false;
+        side = nextRandom(this.rng) < dodgeChance ? this.sideToStep(me, bullet.dir, bullet.pos) : false;
         this.dodgeRolls.set(bullet.id, side);
       }
       if (side) {
         const dodging = this.maneuver?.kind === 'dodge' && this.maneuver.bulletId === bullet.id;
         const perp = sign(bullet.dir).axis === 'x' ? 'y' : 'x';
-        const clear = Math.max(0, this.config!.playerRadius + DODGE_CLEARANCE - Math.abs(bullet.pos[perp] - me.pos[perp]));
+        // Distance to step: to a radius plus a margin beyond the line, on the chosen side
+        // (shorter if already on that side, longer if crossing the line).
+        const off = (me.pos[perp] - bullet.pos[perp]) * DIR_VECTOR[side][perp];
+        const clear = Math.max(0, this.config!.playerRadius + DODGE_CLEARANCE - off);
         const ms = (clear / this.config!.playerSpeed) * 1000 + 50;
         options.push({
           behavior: 'dodge',
@@ -288,8 +296,9 @@ export class BotBrain {
     this.path = null;
   }
 
-  /** Which way to step off a line: toward the side with more room (a coin flip on a tie). */
-  private sideToStep(me: P, lineDir: Direction): Direction {
+  /** Which way to step off a line: the side it is already on (if a line position is given
+   * and there's room there), else toward the side with more room (a coin flip on a tie). */
+  private sideToStep(me: P, lineDir: Direction, linePos?: Vec2): Direction {
     const grid = this.grid!;
     const [a, b] = perpendicular(lineDir);
     const room = (d: Direction) => {
@@ -300,6 +309,14 @@ export class BotBrain {
     };
     const ra = room(a);
     const rb = room(b);
+    if (linePos) {
+      const perp = sign(lineDir).axis === 'x' ? 'y' : 'x';
+      const off = me.pos[perp] - linePos[perp];
+      if (Math.abs(off) > 0.05) {
+        const [mine, mineRoom] = off * DIR_VECTOR[a][perp] > 0 ? [a, ra] : [b, rb];
+        if (mineRoom >= 2) return mine;
+      }
+    }
     return ra === rb ? (nextRandom(this.rng) < 0.5 ? a : b) : ra > rb ? a : b;
   }
 
@@ -365,6 +382,7 @@ export class BotBrain {
 
   /** Emit a move, with stuck detection: trying to move but going nowhere starts an escape. */
   private moving(me: P, dir: Direction | null, now: number): BotInput {
+    if (dir !== null && this.maneuver?.kind !== 'dodge' && this.reentersDodgedPath(me, dir)) dir = null; // wait for it to pass
     if (!this.anchor || Math.hypot(me.pos.x - this.anchor.pos.x, me.pos.y - this.anchor.pos.y) > 0.3) this.anchor = { pos: { ...me.pos }, at: now };
     if (dir !== null && now - this.anchor.at > STUCK_MS && !this.maneuver) {
       const options = DIRECTIONS.filter((d) => d !== dir);
@@ -374,6 +392,19 @@ export class BotBrain {
       dir = escape;
     }
     return { moveDir: dir, shoot: false };
+  }
+
+  /** Would this move take it back into the path of a bullet it dodged, before that bullet passed? */
+  private reentersDodgedPath(me: P, dir: Direction): boolean {
+    const keepOut = this.config!.playerRadius + DODGE_CLEARANCE + 0.1;
+    return this.bullets.some((b) => {
+      if (!this.dodgeRolls.get(b.id) || !approaching(b, me)) return false;
+      const perp = sign(b.dir).axis === 'x' ? 'y' : 'x';
+      const { axis, s } = sign(dir);
+      if (axis !== perp) return false;
+      const off = b.pos[perp] - me.pos[perp];
+      return Math.sign(off) === s && Math.abs(off) < keepOut;
+    });
   }
 
   // ---- perception ----
@@ -441,6 +472,12 @@ export class BotBrain {
     this.lastThink = -Infinity;
     this.planFailedAt = -Infinity;
   }
+}
+
+/** Is the bullet still on its way toward `me` (not past it)? */
+function approaching(b: Bullet, me: P): boolean {
+  const { axis, s } = sign(b.dir);
+  return (me.pos[axis] - b.pos[axis]) * s > 0;
 }
 
 /** Straight for the goal's row or column (whichever is nearer), to line up on it. */

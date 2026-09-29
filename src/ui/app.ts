@@ -187,6 +187,7 @@ export class App {
     this.detach();
     this.view = initialView(); // nothing from a previous session may leak into this one
     this.autoStartSent = false;
+    this.settingUp = false; // whatever this session is, the setup screen is done
     this.session = session;
     this.input = new InputSender((m) => void session.send(m));
     this.unsubscribers = [
@@ -327,6 +328,7 @@ export class App {
             currentName();
             this.settingUp = true;
             this.draw();
+            this.root.querySelector<HTMLElement>('.setup select')?.focus();
           },
         },
       }, ['Play vs bots']),
@@ -353,7 +355,8 @@ export class App {
     const limits = CONFIG_LIMITS.targetScore;
     const target = h('input', { type: 'number', value: String(setup.targetScore), min: limits.min, max: limits.max, data: { key: 'targetScore' } }) as HTMLInputElement;
     const chosen = (): BotSetup => {
-      const score = Math.round(Number(target.value));
+      // An emptied or unparsable field keeps the previous value (Number('') would be 0).
+      const score = target.value.trim() === '' || !target.validity.valid ? NaN : Math.round(Number(target.value));
       return {
         bots: Number(bots.value),
         difficulty: difficulty.value as Difficulty,
@@ -361,35 +364,34 @@ export class App {
         targetScore: Number.isFinite(score) ? Math.min(limits.max, Math.max(limits.min, score)) : setup.targetScore,
       };
     };
+    const start = () => {
+      const opts = chosen();
+      saveBotSetup(opts);
+      this.startLocalMatch(opts);
+    };
+    const back = () => {
+      this.settingUp = false;
+      this.draw();
+    };
     for (const el of [bots, difficulty, map, target]) el.addEventListener('change', () => saveBotSetup(chosen()));
-    return h('div', { class: 'panel setup' }, [
+    const panel = h('div', { class: 'panel setup' }, [
       h('h2', {}, ['Play vs bots']),
       h('label', {}, ['Bots', bots]),
       h('label', {}, ['Difficulty', difficulty]),
       h('label', {}, ['Map', map]),
       h('label', {}, ['Round wins to win', target]),
       h('div', { class: 'row' }, [
-        h('button', {
-          class: 'primary',
-          on: {
-            click: () => {
-              const opts = chosen();
-              saveBotSetup(opts);
-              this.startLocalMatch(opts);
-            },
-          },
-        }, ['Start']),
-        h('button', {
-          on: {
-            click: () => {
-              this.settingUp = false;
-              this.draw();
-            },
-          },
-        }, ['Back']),
+        h('button', { class: 'primary', on: { click: start } }, ['Start']),
+        h('button', { on: { click: back } }, ['Back']),
       ]),
-      h('p', { class: 'hint' }, ['Every bot plays at the same level. Everyone fights everyone.']),
+      h('p', { class: 'hint' }, ['Every bot plays at the same level. Everyone fights everyone. Enter starts, Escape goes back.']),
     ]);
+    panel.addEventListener('keydown', (e) => {
+      const { key, target: el } = e as KeyboardEvent;
+      if (key === 'Enter' && !(el instanceof HTMLButtonElement)) start();
+      else if (key === 'Escape') back();
+    });
+    return panel;
   }
 
   private lobbyScreen(): HTMLElement {
