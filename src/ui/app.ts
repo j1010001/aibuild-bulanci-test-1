@@ -6,6 +6,7 @@
 import { hudModel } from '../client/hud';
 import { lastRoomAfter, parseLastRoom, type LastRoom } from '../client/lastRoom';
 import { InputSender } from '../client/inputSender';
+import { LocalMatchSession, type LocalMatchOptions } from '../client/localMatchSession';
 import { LocalSession } from '../client/localSession';
 import { backToLobby, initialView, playerName, reduce, type ClientView } from '../client/model';
 import type { JoinTarget, Session } from '../client/session';
@@ -74,7 +75,8 @@ function formatTime(seconds: number): string {
 
 export class App {
   view: ClientView = initialView();
-  local: LocalSession | null = null;
+  /** A game running in this page (practice or vs bots), ticked by the page loop. */
+  local: LocalSession | LocalMatchSession | null = null;
   private session: Session | null = null;
   private input: InputSender | null = null;
   private unsubscribers: (() => void)[] = [];
@@ -103,6 +105,22 @@ export class App {
     this.attach(local);
     this.local = local;
     local.start(name);
+  }
+
+  /** Play vs bots: a local match that starts by itself (no lobby to click through). */
+  startLocalMatch(opts: LocalMatchOptions, name = this.name): void {
+    const local = new LocalMatchSession(opts);
+    this.attach(local);
+    this.local = local;
+    local.start(name);
+    this.draw();
+  }
+
+  /** After a local match vs bots: the next one, same bots and settings. */
+  playAgain(): void {
+    if (!(this.local instanceof LocalMatchSession)) return;
+    this.local.playAgain();
+    this.backToLobby();
   }
 
   startMultiplayer(target: JoinTarget, name = this.name): void {
@@ -276,6 +294,7 @@ export class App {
     const lobby = v.lobby;
     if (!lobby) return h('div', { class: 'panel' }, ['Joining…']);
     if (lobby.practice) return h('div', { class: 'panel' }, ['Starting practice…']);
+    if (this.local instanceof LocalMatchSession) return h('div', { class: 'panel' }, ['Starting the match…']);
     const me = lobby.players.find((p) => p.id === v.playerId);
     const isOwner = lobby.ownerId === v.playerId;
     const taken = new Set(lobby.players.filter((p) => p.id !== v.playerId).map((p) => p.skinId));
@@ -392,8 +411,12 @@ export class App {
         rows.map(([id, score]) => h('li', {}, [h('span', { class: 'pname' }, [playerName(v, id)]), h('span', { class: 'score' }, [score])])),
       ),
       h('div', { class: 'row' }, [
-        v.lobby?.practice ? null : h('button', { class: 'primary', on: { click: () => this.backToLobby() } }, ['Back to lobby']),
-        h('button', { on: { click: () => this.leave() } }, ['Leave']),
+        this.local instanceof LocalMatchSession
+          ? h('button', { class: 'primary', on: { click: () => this.playAgain() } }, ['Play again'])
+          : v.lobby?.practice
+            ? null
+            : h('button', { class: 'primary', on: { click: () => this.backToLobby() } }, ['Back to lobby']),
+        h('button', { on: { click: () => this.leave() } }, [this.local ? 'Home' : 'Leave']),
       ]),
     ]);
   }

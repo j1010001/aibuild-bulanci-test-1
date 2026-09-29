@@ -1,12 +1,13 @@
 // Page bootstrap: the App (screens + session), the renderer, the keyboard, and the
-// fixed-timestep loop that ticks practice mode (a multiplayer match is ticked by the
-// server). Everything a human does here goes through the same ClientMessages an AI
+// fixed-timestep loop that ticks local games — practice and vs bots (a multiplayer match
+// is ticked by the server). Everything a human does here goes through the same ClientMessages an AI
 // harness can send via window.GameClient.
 
 import { renderStateAt } from './client/interpolate';
 import { renderStateOf } from './client/model';
 import type { ClientView } from './client/model';
 import type { GameApi } from './api';
+import type { LocalMatchOptions } from './client/localMatchSession';
 import { ensureRapierReady } from './physics/rapier';
 import { Renderer } from './render';
 import type { ClientMessage } from './session/protocol';
@@ -62,6 +63,8 @@ async function main(): Promise<void> {
     view: () => app.view,
     send: (msg) => app.send(msg),
     startPractice: (name) => app.startPractice(name),
+    startLocalMatch: (opts, name) => app.startLocalMatch(opts, name),
+    playAgain: () => app.playAgain(),
     leave: () => app.leave(),
     pause: () => {
       paused = true;
@@ -80,16 +83,20 @@ async function main(): Promise<void> {
 void main();
 
 // window.GameClient drives the game exactly as the UI does (ClientMessages in, ClientView
-// out). window.GameAPI is the practice room's GameApi, for direct sim introspection; it
-// is null outside practice, since in multiplayer the simulation runs on the server.
+// out). window.GameAPI is the local room's GameApi (practice or vs bots), for direct sim
+// introspection; it is null in multiplayer, since in multiplayer the simulation runs on the server.
 declare global {
   interface Window {
     GameClient: {
       view(): ClientView;
       send(msg: ClientMessage): void;
       startPractice(name?: string): void;
+      /** Play vs bots, in the page: { bots: 1–7, difficulty, mapId?, targetScore?, roundTime?, seed? }. */
+      startLocalMatch(opts: LocalMatchOptions, name?: string): void;
+      /** After a local match: start the next one. */
+      playAgain(): void;
       leave(): void;
-      /** Practice only: stop the page loop from ticking, so runTicks() is the only clock. */
+      /** Local games only: stop the page loop from ticking, so runTicks() is the only clock. */
       pause(): void;
       resume(): void;
       isPaused(): boolean;
