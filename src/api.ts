@@ -8,15 +8,16 @@
 import { createGame, DEFAULT_CONFIG, DEFAULT_MAP, step, toSnapshot } from './sim';
 import type { Config, Direction, GameEvent, MapDef, Player, PlayerId, PublicState, State } from './sim';
 import { ensureRapierReady } from './physics/rapier';
+import { SKIN_PALETTE } from './sim/skins';
 
-export type RosterSeed = { name: string; skinId?: string };
+/** `id` is optional: a Room assigns its own stable ids; otherwise GameApi numbers them. */
+export type RosterSeed = { id?: PlayerId; name: string; skinId?: string };
 
 export type StartOptions = {
   /** Seeds all sim randomness (spawns). Same seed + same inputs => identical run. */
   seed?: number;
 };
 
-const SKIN_PALETTE = ['crimson', 'gold', 'teal', 'violet', 'orange', 'lime', 'skyblue', 'hotpink'];
 
 function clone<T>(v: T): T {
   return JSON.parse(JSON.stringify(v));
@@ -36,7 +37,7 @@ export class GameApi {
 
   setRoster(entries: readonly RosterSeed[]): void {
     this.roster = entries.map((e, i) => ({
-      id: `p${this.nextPlayerSeq++}`,
+      id: e.id ?? `p${this.nextPlayerSeq++}`,
       name: e.name,
       skinId: e.skinId ?? SKIN_PALETTE[i % SKIN_PALETTE.length]!,
     }));

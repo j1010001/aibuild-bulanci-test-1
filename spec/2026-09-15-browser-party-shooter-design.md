@@ -602,13 +602,30 @@ is no peer-to-peer traffic.
    `playerId` and `reconnectToken`, or rejects the join if the code is unknown, the room is
    full (`maxPlayers`), or a match is in progress.
 3. **Lobby**: the room keeps the roster, skin choices (unique per room), ready flags, map and
-   config, and broadcasts them as a `lobby` message on every change. Only the owner changes
-   the map and config and starts the match; the start gate (§14) applies. **No game exists
+   config, and broadcasts them as a `lobby` message on every change. **No game exists
    yet**: `createGame` is not called until the owner starts the match, so there is no
    `State` and nothing to snapshot. The lobby is a room, not a game.
-4. **Play**: on start, the room validates the map (the same loader the editor and
-   import use), calls `createGame` with the final roster, and sends `matchStart` with the
-   map and config once. **The roster is fixed from this moment.** Nobody joins a match in
+   - Each joiner gets the first free palette skin; `setSkin` refuses a skin outside the
+     palette or one another player has.
+   - Only the owner changes the map and config and starts the match. The map is chosen
+     **by id from a built-in catalog** (`src/session/maps.ts`), so no client-supplied map
+     data reaches the server until the editor (§13) adds validated custom maps. A client
+     may set only `targetScore` (integer 1–10) and `roundTime` (integer seconds 10–300);
+     physics tuning is never client-settable.
+   - **Start gate**: at least two connected players, and every player except the owner has
+     set ready (the owner's "start" is their ready). A practice room holds exactly one
+     player and can always start.
+   - A player who leaves the lobby is removed outright (there is no score to keep); their
+     reconnect token stops working. The owner role passes on as in §14.
+   - Player names are trimmed and stripped of control and format characters (zero-width,
+     bidirectional overrides), and must be 1–20 characters long, counted in characters.
+   - A refused action is answered with an `error` message to that player only.
+4. **Play**: on start, the room calls `createGame` with the final roster and the
+   catalog map, and sends `matchStart` with the map and config once. (Once the editor adds
+   custom maps, M3, the room validates them with the same loader the editor and import
+   use.) A start that fails is reported to the owner as an `error` and the room stays in
+   the lobby; a player who disconnects while the match is starting is treated as having
+   dropped from the match, not the lobby. **The roster is fixed from this moment.** Nobody joins a match in
    progress; a player who drops is marked disconnected (§10) rather than removed, so their
    score survives, and they can return with their `reconnectToken` (`rejoin`) to get the
    same `playerId` back.
@@ -635,19 +652,30 @@ types live in `src/session/protocol.ts`, shared by client and server.
 | Direction | Message | When |
 |---|---|---|
 | client → server | `createRoom`, `joinRoom { code }`, `rejoin { code, reconnectToken }` | connecting |
-| client → server | `setSkin`, `setReady`; owner only: `setMap`, `setConfig`, `startMatch` | lobby |
+| client → server | `setSkin`, `setReady`, `leave`; owner only: `setMap { mapId }`, `setConfig { targetScore?, roundTime? }`, `startMatch` | lobby (`leave` any time) |
 | client → server | `{ type:'input', seq, moveDir, shoot }` | match |
 | server → client | `roomJoined { code, playerId, reconnectToken }` or `joinRejected { reason }` | connecting |
-| server → client | `{ type:'lobby', players, ownerId, map, config }` | lobby, on every change |
-| server → client | `{ type:'matchStart', map, config, players }` — the static map, sent once | match start |
+| server → client | `{ type:'lobby', code, ownerId, players, settings: { mapId, targetScore, roundTime }, maps, canStart, practice }` | lobby, on every change that changes something |
+| server → client | `{ type:'matchStart', map, config, players, seed }` — the static data, sent once per match (and again to a player who rejoins) | match start |
 | server → client | `{ type:'snapshot', seq, state }` — dynamic state only (players, bullets, scores, phase, round, time) | 30 Hz during the match |
-| server → client | `{ type:'event', event }`, `kind ∈ {playerJoined, playerLeft, ownerChanged, roundStart, roundEnd, matchEnd}` | as they happen |
+| server → client | `{ type:'event', event }`: the sim's events (`playerKilled`, `roundStart`, `roundEnd`, `matchEnd`, `turnRefused`, `spawnFairnessFailed`) plus session events (`playerJoined`, `playerLeft`, `ownerChanged`) | as they happen |
+| server → client | `{ type:'error', message }` — a refused action, to that player only; also `connection replaced` to an old connection when the same token rejoins from a new one | any time |
+
+Every client message goes through `parseClientMessage` (`src/session/protocol.ts`) first,
+the trust boundary: anything malformed is dropped, names are trimmed to 1–20 characters,
+room codes are upper-cased and must be 5–6 characters, and unknown fields are stripped.
 
 - Clients discard snapshots with `seq` older than the latest received (defensive; TCP keeps
   order, but a reconnect can replay).
 - `shoot` is an edge and the room latches it until the next tick, so no trigger is lost
   even when an input message arrives between ticks.
 - Input is sent only when it changes.
+- A rejoin with a token whose player is still connected replaces the old connection: the
+  old one receives `error: connection replaced` and nothing more, and the server adapter
+  closes it.
+- The room never re-broadcasts the lobby for a change that changes nothing (same ready
+  flag, same skin). Limiting message rate and size per connection is the server
+  adapter's job (M2), not the room's.
 
 ## 13. Level editor
 
@@ -695,12 +723,15 @@ the default is a map whose author never chose.
 
 ## 14. Edge cases and error handling
 
-- **Room owner leaves**: ownership passes to the next connected player (in join order)
-  and the room emits `ownerChanged`; a match in progress continues. The §10 rule still
+- **Room owner leaves**: ownership passes to the first connected player *after* the owner
+  in join order (wrapping around), and the room emits `ownerChanged`; a match in progress
+  continues. With nobody connected there is no owner until someone joins or rejoins. The §10 rule still
   applies: if fewer than two connected players remain, the match ends without a winner.
   (This replaces v1's original "host leaves → everyone returns home", which only existed
   because the host's browser ran the simulation.)
-- **Everyone leaves**: the server discards the room once no player is connected.
+- **Everyone leaves**: the server discards the room once no player is connected, calling
+  `Room.dispose()`, which ends any running match and frees its physics world. (A practice
+  room would otherwise never end on its own.)
 - **Server unreachable or connection lost**: the client shows a notice and offers to
   retry `rejoin` with its `reconnectToken`, or return to home.
 - **No fair-spawn board**: editor blocks/warns at save; runtime falls back to edge-margin
@@ -762,6 +793,13 @@ the default is a map whose author never chose.
   (a real hollow shape), not a box or an undistorted-but-wrong torus
   (`obstacleMesh.test.ts`).
 - **Editor**: map round-trip (`save → export → import` ⇒ identical params).
+- **Session** (`protocol.test.ts`, `roomLobby.test.ts`, `roomMatch.test.ts`): the
+  client-message parser rejects anything malformed; the room's lobby rules (owner, unique
+  skins, owner-only settings with limits, start gate, leaving and ownership transfer);
+  the match lifecycle driven by injected ticks (matchStart once, dynamic-only snapshots at
+  30 Hz, input latching and stale-seq rejection, event forwarding, seeded determinism,
+  disconnect/rejoin by token, owner transfer mid-match, match end back to the lobby with
+  the final snapshot first, practice never ending).
 - **Networking** (planned, M2 in `spec/2026-09-29-v1-milestones.md`):
   - `Room` integration through an in-memory adapter: several clients through join →
     lobby → shoot → death → round → match; disconnect/reconnect; owner leaves.
