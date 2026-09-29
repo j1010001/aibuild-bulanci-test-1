@@ -82,13 +82,15 @@ describe('LocalMatchSession: playing', () => {
     await runUntil(session, () => matchStarts(got).length > 0 && lastSnapshot(got) !== undefined, 5);
     const me = myId(got);
     const before = lastSnapshot(got)!.state.players.find((p) => p.id === me)!.pos;
-    // Wait out the round's opening countdown, holding a direction the whole time.
-    for (const dir of ['+X', '-X', '+Y', '-Y'] as const) {
-      await session.send({ type: 'input', seq: ['+X', '-X', '+Y', '-Y'].indexOf(dir), moveDir: dir, shoot: false });
+    // Each direction for a second (outlasting any round-start countdown); some way is open.
+    let farthest = 0;
+    for (const [seq, dir] of (['+X', '-X', '+Y', '-Y'] as const).entries()) {
+      await session.send({ type: 'input', seq, moveDir: dir, shoot: false });
       for (let t = 0; t < 60; t++) session.tick(DT);
+      const at = lastSnapshot(got)!.state.players.find((p) => p.id === me)!.pos;
+      farthest = Math.max(farthest, Math.hypot(at.x - before.x, at.y - before.y));
     }
-    const after = lastSnapshot(got)!.state.players.find((p) => p.id === me)!.pos;
-    expect(Math.hypot(after.x - before.x, after.y - before.y)).toBeGreaterThan(0.5);
+    expect(farthest).toBeGreaterThan(0.5);
     session.close();
   });
 
