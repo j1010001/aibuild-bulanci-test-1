@@ -62,5 +62,25 @@ describe('parseClientMessage', () => {
 
   it('strips unexpected extra fields', () => {
     expect(parseClientMessage({ type: 'startMatch', admin: true })).toEqual({ type: 'startMatch' });
+    expect(parseClientMessage({ type: 'input', seq: 1, moveDir: null, shoot: false, playerId: 'p9' })).toEqual({
+      type: 'input',
+      seq: 1,
+      moveDir: null,
+      shoot: false,
+    });
+  });
+
+  it('strips control, zero-width and bidirectional-override characters from names', () => {
+    expect(parseClientMessage({ type: 'createRoom', name: 'A\u200Bn\u202En\u0007' })).toEqual({ type: 'createRoom', name: 'Ann' });
+    expect(parseClientMessage({ type: 'createRoom', name: '\u200B\u200B' })).toBeNull();
+  });
+
+  it('counts name length in characters, not UTF-16 code units', () => {
+    expect(parseClientMessage({ type: 'createRoom', name: '😀'.repeat(20) })).not.toBeNull();
+    expect(parseClientMessage({ type: 'createRoom', name: '😀'.repeat(21) })).toBeNull();
+  });
+
+  it('rejects an input seq beyond the safe-integer range', () => {
+    expect(parseClientMessage({ type: 'input', seq: 1e308, moveDir: null, shoot: false })).toBeNull();
   });
 });

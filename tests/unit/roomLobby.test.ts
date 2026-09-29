@@ -207,6 +207,15 @@ describe('Room lobby: leaving (spec §14)', () => {
     expect(last(a, 'lobby').players.map((p) => p.id)).toEqual([a.playerId]);
   });
 
+  it('when the sole owner leaves, the next joiner becomes owner', () => {
+    const room = newRoom();
+    const a = join(room, 'Ann');
+    room.disconnect(a.playerId);
+    expect(room.isEmpty()).toBe(true);
+    const b = join(room, 'Bo');
+    expect(last(b, 'lobby').ownerId).toBe(b.playerId);
+  });
+
   it('is empty once everyone has left', () => {
     const room = newRoom();
     const a = join(room, 'Ann');
@@ -223,5 +232,20 @@ describe('Room lobby: leaving (spec §14)', () => {
     const b = join(room, 'Bo');
     room.disconnect(b.playerId);
     expect(room.rejoin(b.reconnectToken, () => {})).toEqual({ ok: false, reason: 'badToken' });
+  });
+});
+
+describe('Room lobby: no broadcast for a change that changes nothing', () => {
+  it('re-sending the same ready flag or skin does not re-broadcast the lobby', async () => {
+    const room = newRoom();
+    const a = join(room, 'Ann');
+    const b = join(room, 'Bo');
+    const lobbies = () => a.inbox.filter((m) => m.type === 'lobby').length;
+    await room.handle(b.playerId, { type: 'setReady', ready: true });
+    const afterFirst = lobbies();
+    for (let i = 0; i < 5; i++) await room.handle(b.playerId, { type: 'setReady', ready: true });
+    const bSkin = last(a, 'lobby').players.find((p) => p.id === b.playerId)!.skinId;
+    await room.handle(b.playerId, { type: 'setSkin', skinId: bSkin });
+    expect(lobbies()).toBe(afterFirst);
   });
 });
