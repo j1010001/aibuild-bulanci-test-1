@@ -216,7 +216,7 @@ Defaults (tuning constants; refined in playtesting):
 | `cadence` | 800 ms | minimum delay between shots |
 | `targetScore` | 3 | round wins needed to win the match |
 | `roundTime` | 60 s | after which a round is a draw |
-| `maxPlayers` | 4 (cap 8) | players per room |
+| `maxPlayers` | 8 (also the cap) | players per room; one per palette skin color, since skins are unique per room |
 | `practice` | false | solo mode (§14); exempts the match from the two-contender rule (§10) |
 | `spawnSeparation` | 5 units | minimum distance between spawn points |
 | `spawnEdgeMargin` | 2 units | min distance of a spawn point from board edges |

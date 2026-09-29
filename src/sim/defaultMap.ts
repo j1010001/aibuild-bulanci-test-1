@@ -1,6 +1,6 @@
 // A hand-authored default map exercising all four primitives and every emergent case
 // from spec §7 (low wall, low slot, shootable donut, blocked donut, both arch axes).
-// Stands in for the level editor, which is out of scope for this build (see report).
+// The built-in "Arena" map (src/session/maps.ts); custom maps come from the level editor (M3).
 //
 // Heights are chosen relative to bulletHeight (0.9) and playerHeight (1.2) — see
 // state.ts's DEFAULT_CONFIG comment for why playerHeight must exceed bulletHeight, and

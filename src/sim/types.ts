@@ -64,9 +64,9 @@ export type Bullet = {
 
 export type Config = {
   playerRadius: number;
-  /** Real collision height of the player's body (a cylinder), spec §5 — must be less
-   * than bulletHeight for a bullet to ever hit a player (spec: "any bullet reaching a
-   * player's circle always kills"), see the note in defaultMap.ts. */
+  /** Real collision height of the player's body (a cylinder), spec §5 — must be GREATER
+   * than bulletHeight, so a bullet flying at bulletHeight always passes through a
+   * player's body and a hit is guaranteed; see the note in defaultMap.ts. */
   playerHeight: number;
   muzzleOffset: number;
   bulletHeight: number;
@@ -75,6 +75,7 @@ export type Config = {
   cadence: number; // ms
   targetScore: number;
   roundTime: number; // seconds
+  /** Players per room: 8, which is also the cap (one per palette skin; spec §5). */
   maxPlayers: number;
   practice: boolean;
   spawnSeparation: number;
