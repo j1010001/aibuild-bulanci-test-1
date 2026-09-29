@@ -3,6 +3,17 @@
 Date: 2026-09-29
 Status: approved. The design authority is still `spec/2026-09-15-browser-party-shooter-design.md`; this document sequences the work.
 
+## Progress
+
+| Milestone | State |
+|---|---|
+| M0 | Task 1 (seeded RNG) done. Tasks 2–4 (player shape from one definition, map loader, spec cleanup) still open. |
+| M1 | Done: shared `Room` + protocol (`src/session`), client view model, practice via `LocalSession`, screens and HUD. |
+| M2 | Done: authoritative server (`server/`), `NetSession` + interpolation + rejoin in the browser, headless bots + `npm run bot`, two-browser Playwright smoke test. |
+| M3, M4 | Not started. |
+
+Deviation from the plan: until M0 task 3 (map loader) and M3 (editor) exist, a room's map is chosen **by id from a built-in catalog** (`src/session/maps.ts`), so no client-supplied map data reaches the server. The loader will validate custom maps when they arrive.
+
 ## Context
 
 v0.1.0 (tag `v0.1.0`, commit 884b449) is a **single-browser simulation**. It has:
