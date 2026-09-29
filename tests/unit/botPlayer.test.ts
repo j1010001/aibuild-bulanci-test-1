@@ -23,7 +23,9 @@ async function play(room: Room, bots: BotPlayer[], done: () => boolean, maxTicks
   for (let t = 0; t < maxTicks; t++) {
     if (done()) return t;
     for (const b of bots) b.step(now);
-    await settle(); // let async handlers (startMatch) run
+    // The async match start only happens from the lobby; mid-match every handler is
+    // synchronous, so yielding there would only make a long match slow to simulate.
+    if (bots.some((b) => b.view.screen === 'lobby')) await settle();
     room.tick(1 / 60);
     now += 1000 / 60;
   }

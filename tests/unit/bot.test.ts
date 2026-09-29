@@ -46,6 +46,16 @@ describe('chaseAndShoot', () => {
     expect(chaseAndShoot(state({ x: 20.1, y: 5, facing: '+Y' }, { x: 20, y: 30 }), 'a', 'b')).toEqual({ moveDir: null, shoot: true });
   });
 
+  // Regression (found with two hunting bots): lined up but closer than the gun's reach plus
+  // the target's radius, the turn toward the target is refused (§8: the gun would enter its
+  // body), so both bots danced forever. Back off along the firing axis first.
+  it('backs away along the firing axis when too close to turn toward the target', () => {
+    expect(chaseAndShoot(state({ x: 13.3, y: 23.6, facing: '-X' }, { x: 13.2, y: 24.8 }), 'a', 'b')).toEqual({ moveDir: '-Y', shoot: false });
+    expect(chaseAndShoot(state({ x: 10, y: 5, facing: '+Y' }, { x: 11.2, y: 5.1 }), 'a', 'b')).toEqual({ moveDir: '-X', shoot: false });
+    // far enough: turn and fire as usual
+    expect(chaseAndShoot(state({ x: 13.3, y: 22.8, facing: '-X' }, { x: 13.2, y: 24.8 }), 'a', 'b')).toEqual({ moveDir: '+Y', shoot: false });
+  });
+
   it('does nothing when the target is dead or missing', () => {
     expect(chaseAndShoot(state({ x: 5, y: 5, facing: '+Y' }, { x: 20, y: 30 }, false), 'a', 'b')).toEqual({ moveDir: null, shoot: false });
     expect(chaseAndShoot(state({ x: 5, y: 5, facing: '+Y' }, { x: 20, y: 30 }), 'a', 'zz')).toEqual({ moveDir: null, shoot: false });
