@@ -1,19 +1,18 @@
-// Practice mode: a one-player Room running in the page, no server (spec §12). Every
-// message is JSON round-tripped in both directions and client messages go through the
-// same parser the server uses, so practice behaves exactly like a networked game.
+// Practice mode: a one-player Room running in the page, no server (spec §12), reached
+// through an InProcessSession so practice behaves exactly like a networked game.
 
-import { parseClientMessage, type ClientMessage, type ServerMessage } from '../session/protocol';
+import type { ClientMessage, ServerMessage } from '../session/protocol';
 import { Room } from '../session/room';
-import type { PlayerId } from '../sim';
+import { InProcessSession } from './inProcessSession';
 import type { Session } from './session';
 
 export type LocalSessionOptions = { seed?: number; mapId?: string };
 
 export class LocalSession implements Session {
   readonly room: Room;
+  private inner: InProcessSession | null = null;
   private listeners = new Set<(msg: ServerMessage) => void>();
   private closeListeners = new Set<(reason: string) => void>();
-  private playerId: PlayerId | null = null;
   private closed = false;
 
   constructor(opts: LocalSessionOptions = {}) {
@@ -22,15 +21,18 @@ export class LocalSession implements Session {
 
   /** Joins the practice room; subscribe with onMessage first to see the join messages. */
   start(name: string): void {
-    // The same name rules as the server: a name the parser rejects falls back to "Player".
-    const parsed = parseClientMessage({ type: 'createRoom', name });
-    this.room.join(parsed?.type === 'createRoom' ? parsed.name : 'Player', (msg) => this.deliver(msg));
+    if (this.closed || this.inner) return;
+    const inner = new InProcessSession(this.room, { kind: 'create' }, name);
+    this.inner = inner;
+    inner.onMessage((m) => {
+      for (const l of this.listeners) l(m);
+    });
+    inner.onClose((reason) => this.finish(reason));
+    inner.connect();
   }
 
   async send(msg: ClientMessage): Promise<void> {
-    if (this.closed || this.playerId === null) return;
-    const parsed = parseClientMessage(JSON.parse(JSON.stringify(msg)));
-    if (parsed) await this.room.handle(this.playerId, parsed);
+    if (!this.closed) await this.inner?.send(msg);
   }
 
   onMessage(listener: (msg: ServerMessage) => void): () => void {
@@ -50,20 +52,16 @@ export class LocalSession implements Session {
 
   close(): void {
     if (this.closed) return;
-    if (this.playerId !== null) this.room.disconnect(this.playerId);
+    this.inner?.close();
     this.room.dispose(); // also stops a match that is still starting (Room tracks it)
-    this.closed = true;
-    this.listeners.clear();
-    for (const l of this.closeListeners) l('closed');
-    this.closeListeners.clear();
+    this.finish('closed');
   }
 
-  private deliver(msg: ServerMessage): void {
+  private finish(reason: string): void {
     if (this.closed) return;
-    // Learned from the message, not join()'s return value: listeners may send() while
-    // join() is still delivering its first messages (practice auto-starts that way).
-    if (msg.type === 'roomJoined') this.playerId = msg.playerId;
-    const copy = JSON.parse(JSON.stringify(msg)) as ServerMessage;
-    for (const l of this.listeners) l(copy);
+    this.closed = true;
+    this.listeners.clear();
+    for (const l of this.closeListeners) l(reason);
+    this.closeListeners.clear();
   }
 }

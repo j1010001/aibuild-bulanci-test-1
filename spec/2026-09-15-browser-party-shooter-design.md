@@ -688,6 +688,20 @@ is no peer-to-peer traffic.
   `createRoom` beyond that is answered `joinRejected: serverFull`). A 30 s ping heartbeat
   terminates half-open connections, so a vanished player doesn't keep a room alive.
 - A room whose tick throws is closed and removed; the loop and every other room carry on.
+
+### Headless bots
+
+`BotPlayer` (`src/client/botPlayer.ts`) plays through any `Session` with the same view
+model and `InputSender` the UI uses: as a guest it readies itself; as an owner with host
+settings it applies them and starts once the start gate opens; in a match it hunts the
+nearest opponent (line up on the axis with the smaller gap, back off when too close for
+the gun to fit, face, fire) or stands still (`idle`). After lining up it waits a reaction
+delay drawn from its own seeded generator — identical bots would otherwise fire on the
+same tick and trade kills forever — and it throttles input to stay far below the
+server's rate limit. `InProcessSession` attaches any number of bots (or a practice
+player) to an in-memory `Room`; `NetSession` attaches them to the real server.
+`npm run bot -- --create --count 3 --map open --target-score 1 --once` fills a room on a
+running server and prints the winner.
 - A single drift-corrected 60 Hz loop ticks every room (`server/loop.ts`): ticks are due
   at absolute times, so late timer wake-ups catch up rather than slowing the game, and
   after a long stall it catches up at most 5 ticks and resyncs instead of spiralling.
@@ -872,7 +886,14 @@ the default is a map whose author never chose.
 - **Networking**:
   - Real-socket integration (`tests/integration/server.test.ts`) against a server started
     in the test: health check, create → join → ready → start with ~30 Hz snapshots, a
-    dropped socket reported to the others.
+    dropped socket reported to the others, replaced sockets, frame limits, connection
+    cap, port in use, heartbeat, shutdown.
+  - `NetSession` against the real server (`tests/integration/netSession.test.ts`).
+  - **Bots** (`bot.test.ts`, `botPlayer.test.ts`, `tests/integration/bots.test.ts`): the
+    strategy's decisions (including backing off at close range); bots readying, hosting
+    and starting; two bots playing an in-memory match to an agreed winner; the rate
+    limit respected; seeded reaction delays; three bots over real sockets; the CLI end
+    to end.
   - A two-tab browser smoke test against the local server: create code → join → shoot →
     death → round → match.
   - The server compiles under its own no-DOM tsconfig (the §4 isolation rule).

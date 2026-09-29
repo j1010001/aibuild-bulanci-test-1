@@ -1,6 +1,6 @@
 {
   "extends": "../tsconfig.json",
   "compilerOptions": { "types": ["node"] },
-  "include": ["../src", "../server", "."],
+  "include": ["../src", "../server", "../scripts", "."],
   "exclude": ["../src/types/web-globals.d.ts"]
 }

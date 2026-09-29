@@ -8,10 +8,11 @@
     "dev:web": "vite",
     "server": "tsx server/index.ts",
     "build": "tsc -p tsconfig.core.json && tsc -p server/tsconfig.json && vite build",
-    "typecheck": "tsc -p tsconfig.json && tsc -p tsconfig.core.json && tsc -p server/tsconfig.json && tsc -p tests/tsconfig.json",
+    "typecheck": "tsc -p tsconfig.json && tsc -p tsconfig.core.json && tsc -p server/tsconfig.json && tsc -p scripts/tsconfig.json && tsc -p tests/tsconfig.json",
     "preview": "vite preview",
     "test": "vitest run",
-    "test:watch": "vitest"
+    "test:watch": "vitest",
+    "bot": "tsx scripts/bot.ts"
   },
   "dependencies": {
     "@dimforge/rapier3d-compat": "^0.21.0",

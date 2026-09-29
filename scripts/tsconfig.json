@@ -1,0 +1,5 @@
+{
+  // Node scripts (the headless bot). Node types, no DOM.
+  "extends": "../server/tsconfig.json",
+  "include": ["./**/*.ts", "../src/sim", "../src/physics", "../src/geometry", "../src/session", "../src/api.ts", "../src/client", "../src/net"]
+}

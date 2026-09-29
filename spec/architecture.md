@@ -45,7 +45,7 @@ flowchart LR
     Loop["60 Hz tick loop<br/>server/loop.ts (built)"]
   end
 
-  Bot["Headless bot<br/>scripts/bot.ts (M2)"]
+  Bot["Headless bots<br/>src/client/botPlayer.ts, scripts/bot.ts (built)"]
 
   Input --> NetClient
   Input --> PracticeRoom
@@ -87,7 +87,7 @@ flowchart LR
 | **Client model** | Pure fold of server messages into the ClientView (screens, lobby, match, snapshots, result), the HUD model, the `InputSender`, the `Session` interface and `LocalSession` (practice), and the chase-and-shoot bot strategy. DOM-free, so it is unit-tested. | `src/client/*` | built |
 | **UI screens** | Home → Practice / Create / Join / Editor → Lobby → Match → Match end, drawn from the ClientView. Names only ever inserted as text. | `src/ui/*` | built |
 | **Level editor** | `EditorApi` (headless) plus a 2D surface and a live 3D preview; validation, presets, JSON import/export. | `src/editor/*` | M3 |
-| **Bot client** | Drives a player over a real WebSocket using the same protocol, so AI tests can fill rooms without a browser. | `scripts/bot.ts` | M2 |
+| **Bot client** | `BotPlayer` plays through any Session with the UI's view model and InputSender (hunt or idle; seeded reaction delays). `InProcessSession` attaches it to an in-memory Room; `NetSession` to the real server. `npm run bot` is the CLI. | `src/client/botPlayer.ts`, `src/client/inProcessSession.ts`, `scripts/bot.ts` | built |
 
 ## 3. Dependency rules
 
@@ -200,7 +200,8 @@ A `Room` runs inside the page, driven by the page's own `requestAnimationFrame` 
 |---|---|---|---|
 | `GameApi.runTicks(n)` | One game, rules only | Far faster than real time; deterministic with a seed | built |
 | `Room` with sink callbacks | Lobby, match, multiple clients, disconnects | Fast, no sockets | built |
-| `scripts/bot.ts` over WebSocket | The real server end to end | Real time | M2 |
+| `BotPlayer` + `InProcessSession` | Many bots in one in-memory Room, ticked by hand | Far faster than real time | built |
+| `scripts/bot.ts` over WebSocket | The real server end to end | Real time | built |
 
 In the page, `window.GameClient` is the UI-level harness: ClientMessages in, the ClientView out, and in practice `pause()`/`runTicks(n)` so the page loop and the harness don't both advance the same state (§4).
 
