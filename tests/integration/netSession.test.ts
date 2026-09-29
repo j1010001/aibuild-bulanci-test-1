@@ -1,6 +1,7 @@
 // M2 task 2: the browser's network Session, run in Node against the real server (Node 25
 // has the same global WebSocket the browser does, so this is the exact client code).
 
+import { createServer as createTcpServer, type Server as TcpServer, type Socket } from 'node:net';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { NetSession } from '../../src/net/client';
 import { startServer, type RunningServer } from '../../server/server';
@@ -51,11 +52,15 @@ describe('NetSession', () => {
     b.session.close();
   });
 
-  it('delivers messages sent before the socket opened, in order', async () => {
+  // Test change, with justification (review): one queued message could not show ordering.
+  // Two whose order is visible in the result can: the last setSkin wins.
+  it('delivers messages sent before the socket opened, after the join and in order', async () => {
     const a = open({ kind: 'create' });
     a.session.send({ type: 'setSkin', skinId: 'teal' }); // queued: the socket is still connecting
-    const lobby = await until(() => (a.find('lobby')?.players[0]?.skinId === 'teal' ? a.find('lobby') : undefined));
-    expect(lobby.players[0]!.skinId).toBe('teal');
+    a.session.send({ type: 'setSkin', skinId: 'gold' });
+    const lobbies = () => a.inbox.filter((m) => m.type === 'lobby') as Extract<ServerMessage, { type: 'lobby' }>[];
+    await until(() => (lobbies().at(-1)?.players[0]?.skinId === 'gold' ? true : undefined));
+    expect(lobbies().map((l) => l.players[0]!.skinId)).toEqual(['crimson', 'teal', 'gold']);
     a.session.close();
   });
 
@@ -93,6 +98,55 @@ describe('NetSession', () => {
     expect(a.find('replaced')).toBeDefined();
     a2.session.close();
     b.session.close();
+  });
+
+  it('reports a malformed server address as a close instead of throwing', async () => {
+    let session: NetSession | null = null;
+    expect(() => {
+      session = new NetSession('localhost:8787', { kind: 'create' }, 'Ann'); // no scheme: the WebSocket constructor throws
+    }).not.toThrow();
+    const closes: string[] = [];
+    session!.onClose((r) => closes.push(r));
+    await until(() => (closes.length > 0 ? true : undefined));
+    expect(closes).toEqual([expect.stringMatching(/address/)]);
+  });
+
+  it('gives up on a server that accepts the connection but never answers', async () => {
+    const sockets: Socket[] = [];
+    const blackHole: TcpServer = createTcpServer((s) => void sockets.push(s)); // never completes the handshake
+    await new Promise<void>((r) => blackHole.listen(0, r));
+    const port = (blackHole.address() as { port: number }).port;
+    try {
+      const session = new NetSession(`ws://127.0.0.1:${port}`, { kind: 'create' }, 'Ann', { connectTimeoutMs: 200 });
+      const closes: string[] = [];
+      session.onClose((r) => closes.push(r));
+      await until(() => (closes.length > 0 ? true : undefined), 2000);
+      expect(closes).toEqual([expect.stringMatching(/reach/)]);
+    } finally {
+      for (const s of sockets) s.destroy();
+      await new Promise<void>((r) => blackHole.close(() => r()));
+    }
+  });
+
+  it('reports a drop after a successful connection as a lost connection, not an unreachable server', async () => {
+    const tmp = await startServer({ port: 0 });
+    const session = new NetSession(`ws://127.0.0.1:${tmp.port}`, { kind: 'create' }, 'Ann');
+    const inbox: ServerMessage[] = [];
+    const closes: string[] = [];
+    session.onMessage((m) => inbox.push(m));
+    session.onClose((r) => closes.push(r));
+    await until(() => (inbox.some((m) => m.type === 'roomJoined') ? true : undefined));
+    await tmp.close(); // terminates the socket: no close frame, code 1006
+    await until(() => (closes.length > 0 ? true : undefined));
+    expect(closes).toEqual([expect.stringMatching(/lost/)]);
+  });
+
+  it('close() before the socket opens: reported once, and nothing is delivered', async () => {
+    const a = open({ kind: 'create' });
+    a.session.close();
+    await new Promise((r) => setTimeout(r, 200));
+    expect(a.closes).toHaveLength(1);
+    expect(a.inbox).toHaveLength(0);
   });
 
   it('reports a failure to connect as a close', async () => {
