@@ -1,8 +1,9 @@
-// createGame(RAPIER, config, map, roster) -> State (spec §4, §6, §10). Builds the real
+// createGame(RAPIER, config, map, roster, seed) -> State (spec §4, §6, §10). Builds the real
 // physics world (spec §7) once at load time and places the roster into it via spawn
 // fairness — the same real-3D queries used every tick, not a separate 2D approximation.
 
 import { PhysicsWorld } from '../physics/world';
+import { rngStateFromSeed } from './rng';
 import type { Rapier } from '../physics/rapier';
 import { assignSpawns } from './spawn';
 import type { Config, GameEvent, MapDef, Player, PlayerId, State } from './types';
@@ -35,7 +36,13 @@ export function createGame(
   configOverrides: Partial<Config>,
   map: MapDef,
   roster: readonly RosterEntry[],
+  seed: number,
 ): { state: State; events: GameEvent[] } {
+  // Recorded as the 32-bit value the PRNG actually uses, so state.seed always replays
+  // the run; a seed that can't round-trip through JSON (NaN, Infinity) is rejected.
+  if (!Number.isInteger(seed)) throw new Error(`createGame: seed must be an integer, got ${seed}`);
+  const usedSeed = seed >>> 0;
+
   const config: Config = {
     ...DEFAULT_CONFIG,
     ...configOverrides,
@@ -71,6 +78,8 @@ export function createGame(
     roundStartedAt: 0,
     winnerId: null,
     nextBulletSeq: 0,
+    seed: usedSeed,
+    rngState: rngStateFromSeed(usedSeed),
     physics,
   };
 

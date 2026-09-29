@@ -2,13 +2,14 @@
 // spec §7), mutually separated, edge-margined, and admits at least one facing in which
 // the gun fits.
 
+import { nextRandom } from './rng';
 import { DIRECTIONS } from './types';
 import type { Direction, GameEvent, PlayerId, State, Vec2 } from './types';
 
 const MAX_ATTEMPTS = 300;
 
-function randRange(lo: number, hi: number): number {
-  return lo + Math.random() * (hi - lo);
+function randRange(state: State, lo: number, hi: number): number {
+  return lo + nextRandom(state) * (hi - lo);
 }
 
 function farEnough(pos: Vec2, chosen: readonly Vec2[], minSep: number): boolean {
@@ -19,10 +20,10 @@ function farEnough(pos: Vec2, chosen: readonly Vec2[], minSep: number): boolean 
   });
 }
 
-function shuffledDirections(): Direction[] {
+function shuffledDirections(state: State): Direction[] {
   const arr = [...DIRECTIONS];
   for (let i = arr.length - 1; i > 0; i--) {
-    const j = Math.floor(Math.random() * (i + 1));
+    const j = Math.floor(nextRandom(state) * (i + 1));
     const tmp = arr[i]!;
     arr[i] = arr[j]!;
     arr[j] = tmp;
@@ -38,7 +39,7 @@ function muzzleWithinBoard(pos: Vec2, dir: Direction, muzzleOffset: number, boar
 }
 
 function pickValidFacing(state: State, playerId: PlayerId, pos: Vec2): Direction | null {
-  for (const dir of shuffledDirections()) {
+  for (const dir of shuffledDirections(state)) {
     if (!muzzleWithinBoard(pos, dir, state.config.muzzleOffset, state.config.board)) continue;
     if (state.physics.gunFits(playerId, pos, dir, state.config.muzzleOffset)) return dir;
   }
@@ -49,8 +50,8 @@ function findFairSpawn(state: State, playerId: PlayerId, chosen: readonly Vec2[]
   const { board, spawnEdgeMargin, spawnSeparation } = state.config;
   for (let i = 0; i < MAX_ATTEMPTS; i++) {
     const pos = {
-      x: randRange(spawnEdgeMargin, board.width - spawnEdgeMargin),
-      y: randRange(spawnEdgeMargin, board.height - spawnEdgeMargin),
+      x: randRange(state, spawnEdgeMargin, board.width - spawnEdgeMargin),
+      y: randRange(state, spawnEdgeMargin, board.height - spawnEdgeMargin),
     };
     if (!state.physics.isFreeOfObstacles(pos)) continue;
     if (!farEnough(pos, chosen, spawnSeparation)) continue;

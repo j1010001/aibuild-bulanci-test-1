@@ -96,6 +96,8 @@ export type State = {
   roundStartedAt: number; // sim-clock ms
   winnerId: PlayerId | null; // set only once phase === 'matchEnd'
   nextBulletSeq: number;
+  seed: number; // the seed this game was created with; replaying with it reproduces the run
+  rngState: number; // current PRNG state (sim/rng.ts), advanced by every random draw
   physics: PhysicsWorld;
 };
 

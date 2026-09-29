@@ -11,6 +11,11 @@ import { ensureRapierReady } from './physics/rapier';
 
 export type RosterSeed = { name: string; skinId?: string };
 
+export type StartOptions = {
+  /** Seeds all sim randomness (spawns). Same seed + same inputs => identical run. */
+  seed?: number;
+};
+
 const SKIN_PALETTE = ['crimson', 'gold', 'teal', 'violet', 'orange', 'lime', 'skyblue', 'hotpink'];
 
 function clone<T>(v: T): T {
@@ -53,13 +58,16 @@ export class GameApi {
    * await the first time it's used per page/process (src/physics/rapier.ts) — every
    * other call on GameApi, including tick()/runTicks(), is synchronous after that.
    */
-  async start(configOverrides: Partial<Config> = {}, map: MapDef = DEFAULT_MAP): Promise<void> {
+  async start(configOverrides: Partial<Config> = {}, map: MapDef = DEFAULT_MAP, options: StartOptions = {}): Promise<void> {
     if (this.roster.length === 0) {
       throw new Error('GameApi.start: add at least one player to the roster first');
     }
     const RAPIER = await ensureRapierReady();
     this.state?.physics.dispose();
-    const { state, events } = createGame(RAPIER, configOverrides, map, this.roster);
+    // Picked here, outside the sim, and recorded on State (getState().seed), so an
+    // unseeded run can still be replayed exactly by passing that seed back in.
+    const seed = options.seed ?? Math.floor(Math.random() * 2 ** 32);
+    const { state, events } = createGame(RAPIER, configOverrides, map, this.roster, seed);
     this.state = state;
     this.eventLog = [...events];
     this.tickCount = 0;

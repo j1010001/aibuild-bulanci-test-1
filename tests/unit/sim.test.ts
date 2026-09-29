@@ -20,7 +20,7 @@ function game(
   board?: { width: number; height: number },
 ): State {
   const roster = names.map((name, i) => ({ id: `p${i}`, name, skinId: 'crimson' }));
-  const { state } = createGame(RAPIER, { practice: true, ...configOverrides }, mapWith(obstacles, board), roster);
+  const { state } = createGame(RAPIER, { practice: true, ...configOverrides }, mapWith(obstacles, board), roster, 0);
   return state;
 }
 
@@ -295,10 +295,11 @@ describe('rounds and match (§10)', () => {
 });
 
 describe('spawn fairness (§10, §14)', () => {
-  it('places every player outside solid regions (real physics), separated, and margined from board edges', () => {
+  // Spawns are seeded now, so sweep several seeds to keep covering many random layouts.
+  it.each(Array.from({ length: 20 }, (_, seed) => seed))('places every player outside solid regions (real physics), separated, and margined from board edges (seed %i)', (seed) => {
     const wall: ObstacleDef = { id: 'w', type: 'cube', pos: { x: 20, y: 20 }, params: { w: 4, d: 4, h: 2 } };
     const roster = ['A', 'B', 'C', 'D'].map((name, i) => ({ id: `p${i}`, name, skinId: 'crimson' }));
-    const { state } = createGame(RAPIER, {}, mapWith([wall]), roster);
+    const { state } = createGame(RAPIER, {}, mapWith([wall]), roster, seed);
 
     for (const p of state.players) {
       expect(p.pos.x).toBeGreaterThanOrEqual(state.config.spawnEdgeMargin - 1e-9);

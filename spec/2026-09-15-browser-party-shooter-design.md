@@ -114,11 +114,23 @@ Each unit has one job and a well-defined interface.
 | **Control surface (`GameApi`)** | The one entry point that drives `sim`: roster, `start`/`reset`, input (`setMoveDir`/`pressShoot`), advancing time (`tick`/`runTicks`), and introspection (`getState`/`getEvents`). Keyboard input (§8) and an AI/test harness call the *same* methods — there is no UI-only path. Exposed to the page as `window.GameAPI`. `start()` is async — the physics engine's WASM module needs one await the first time it's used per page/process; every other call, including `tick()`/`runTicks()`, is synchronous after that. | sim |
 
 `sim` exposes `step(state, inputs, dt) → { state, events }` and
-`createGame(physics, config, map) → state`. Given the same `(state, inputs, dt)` *and*
-the same physics-world contents (obstacles never change after load; only kinematic
-player positions move), it is deterministic — real-3D collision queries replaced
-hand-rolled 2D math (§7), not the "pure function of its arguments" property that makes
-`step` unit-testable and portable to a server process unchanged.
+`createGame(RAPIER, config, map, roster, seed) → { state, events }`. Given the same
+`(state, inputs, dt)` *and* the same physics-world contents (obstacles never change after
+load; only kinematic player positions move), it is deterministic — real-3D collision
+queries replaced hand-rolled 2D math (§7), not the "pure function of its arguments"
+property that makes `step` unit-testable and portable to a server process unchanged.
+
+**All sim randomness comes from a seed** (`src/sim/rng.ts`): the PRNG state lives in
+`State.rngState` as a plain number, so it is cloned by `step` and carried in snapshots,
+and no sim state depends on `Math.random` (`step` never calls it; `createGame` reaches it
+only through three.js, which uses it for geometry object UUIDs, not game state). This
+matters because a round transition inside
+`step` re-runs spawn placement (§10) — before the seed existed, any replay that crossed a
+round boundary diverged. `State.seed` records the seed a game was created with;
+`GameApi.start(config, map, { seed })` accepts one, and picks and records one when none is
+given, so any run (an AI test, a bug report) can be replayed exactly from its seed. The
+seed must be an integer; it is stored as the 32-bit value actually used (`seed >>> 0`), so
+`State.seed` always replays the run.
 
 `GameApi.tick()`/`runTicks(n)` advance the sim on demand, independent of real time or a
 render frame — the point is that an AI harness can fast-forward a game far faster than
@@ -218,6 +230,8 @@ State = {
   players: Player[],
   obstacles: ObstacleDef[],
   bullets: Bullet[],
+  seed,              // the seed this game was created with (§4) — replaying with it reproduces the run
+  rngState,          // current PRNG state, advanced by every random draw (spawns)
   physics,           // live handle into the real 3D collision world (§7) — NOT plain
                       // data; excluded from GameApi.getState()'s JSON-safe snapshot
 }
@@ -470,7 +484,7 @@ replaced.
   without one when the players left.
   Solo **practice** is exempt: a game created with `config.practice = true` is a declared
   one-player mode (§14) and never ends for want of opponents.
-- **Spawns**: random with fairness each round — each spawn point is non-solid (a real
+- **Spawns**: random (drawn from the game's seed, §4) with fairness each round — each spawn point is non-solid (a real
   player-body-sized query against the physics world, §7, comes back clear), mutually
   separated by at least `spawnSeparation`, and pulled in from
   board edges by at least `spawnEdgeMargin`, and admits at least one facing in which the gun
@@ -729,6 +743,13 @@ the default is a map whose author never chose.
   against two independently-constructed games/physics worlds, since a `PhysicsWorld` is
   a live mutable handle and reusing one across two replay runs would apply both input
   sequences to the same world sequentially rather than test two independent trials).
+- **Seeded determinism** (`determinism.test.ts`): the PRNG is reproducible per seed; the
+  same seed gives identical spawns and a different seed different ones; a replay is
+  identical across several round boundaries (each re-runs spawn placement); `step` never
+  calls `Math.random`, and no load-time state changes when `Math.random` does; a seed that
+  can't be replayed is rejected and an out-of-range one is recorded as the value used;
+  `GameApi` picks a fresh seed per unseeded start, records it, and a run replays exactly
+  from it.
 - **Rendering/collision fidelity** (pure, unit-tested despite being about rendering,
   because it's the correctness property behind §11's "built from the same function as
   the collider" rule, not a look-and-feel one — three.js geometry objects are
