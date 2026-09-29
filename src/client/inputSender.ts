@@ -10,10 +10,12 @@ export class InputSender {
 
   constructor(private readonly send: (msg: ClientMessage) => void) {}
 
-  setMoveDir(dir: Direction | null): void {
-    if (dir === this.moveDir) return;
+  /** Returns whether it sent anything (only a change is sent). */
+  setMoveDir(dir: Direction | null): boolean {
+    if (dir === this.moveDir) return false;
     this.moveDir = dir;
     this.send({ type: 'input', seq: this.seq++, moveDir: dir, shoot: false });
+    return true;
   }
 
   /** Forget the last direction sent: a new match starts with no movement on the server side. */

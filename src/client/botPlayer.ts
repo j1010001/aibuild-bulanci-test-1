@@ -148,8 +148,8 @@ export class BotPlayer {
   /** Movement changes are throttled; stopping never is (a late stop means overshooting). */
   private move(dir: Direction, now: number): void {
     if (now - this.lastInputAt < MIN_INPUT_INTERVAL_MS) return;
-    this.input.setMoveDir(dir); // sends only when it changed
-    this.lastInputAt = now;
+    // Only an actual send starts the interval: holding a direction must not delay a turn.
+    if (this.input.setMoveDir(dir)) this.lastInputAt = now;
   }
 
   private stop(): void {

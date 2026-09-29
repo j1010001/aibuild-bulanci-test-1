@@ -172,9 +172,10 @@ export class NavGrid {
    * leg along one axis from the previous point. `facing` (optional) makes a first turn
    * cost like any other. An empty list means already there. A goal where a player can't
    * fit is replaced by the nearest place reachable from `from`; a goal where a player fits
-   * but can't be reached returns null.
+   * but can't be reached returns null — or, with `orNearest`, a path to the reachable place
+   * nearest it (for chasing someone standing where no path leads, e.g. against a board edge).
    */
-  findPath(from: Vec2, to: Vec2, facing?: Direction): Vec2[] | null {
+  findPath(from: Vec2, to: Vec2, facing?: Direction, orNearest = false): Vec2[] | null {
     const entry = this.entry(from, to);
     if (!entry) return null;
     const goalIndex = this.snapIndex(to);
@@ -186,15 +187,15 @@ export class NavGrid {
       target = nearest;
     }
     const startHeading = facing ? DIRECTIONS.indexOf(facing) : 4;
-    let result = this.search(entry.cell, startHeading, target, false);
-    if (!result && !this.fits[goalIndex]) result = this.search(entry.cell, startHeading, target, true); // nearest reachable
+    const result = this.search(entry.cell, startHeading, target, orNearest || !this.fits[goalIndex]);
     if (!result) return null;
     return straighten(from, [...entry.legs, ...result]);
   }
 
   // ---- search ----
 
-  /** A* from `start` to `goal`; with `nearestFallback`, ends at the reachable cell nearest `goal`. */
+  /** A* from `start` to `goal`. A failed search has expanded everything reachable, so with
+   * `nearestFallback` it ends at the expanded cell nearest `goal` instead of failing. */
   private search(start: number, startHeading: number, goal: number, nearestFallback: boolean): Vec2[] | null {
     const gen = ++this.generation;
     const gx = this.cx[goal]!;
@@ -207,7 +208,7 @@ export class NavGrid {
     this.g[s0] = 0;
     this.seen[s0] = gen;
     this.came[s0] = -1;
-    heap.push(s0, nearestFallback ? 0 : h(start));
+    heap.push(s0, h(start));
     let found = -1;
     let best = s0;
     let bestDist = Infinity;
@@ -224,12 +225,10 @@ export class NavGrid {
         found = s;
         break;
       }
-      if (nearestFallback) {
-        const d = Math.hypot(this.cx[cell]! - gx, this.cy[cell]! - gy);
-        if (d < bestDist) {
-          bestDist = d;
-          best = s;
-        }
+      const d = Math.hypot(this.cx[cell]! - gx, this.cy[cell]! - gy);
+      if (d < bestDist) {
+        bestDist = d;
+        best = s;
       }
       for (let d = 0; d < 4; d++) {
         if (!this.step[cell * 4 + d]) continue;
@@ -240,7 +239,7 @@ export class NavGrid {
           this.seen[ns] = gen;
           this.g[ns] = cost;
           this.came[ns] = s;
-          heap.push(ns, nearestFallback ? cost : cost + h(next));
+          heap.push(ns, cost + h(next));
         }
       }
     }

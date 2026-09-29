@@ -33,6 +33,27 @@ const REACHED = 0.1; // a waypoint counts as reached this close (or once passed)
 const OFF_LINE = 0.2; // drifted this far off a run's line: step back onto it first
 const STUCK_MS = 1200;
 const REPLAN_MS = 1500;
+const RETRY_PLAN_MS = 500; // after a failed or empty plan, move directly before searching again
+const DODGE_CLEARANCE = 0.2; // sidestep until this far beyond a body radius off the bullet's line
+const GRID_CACHE_SIZE = 8;
+
+// One navigation grid per map and player shape, shared by every bot (each receives its own
+// JSON copy of the map, so the cache is keyed by content, not identity).
+const grids = new Map<string, NavGrid>();
+
+function gridFor(map: MapDef, config: Config): NavGrid {
+  const { playerRadius, playerHeight, bulletHeight, muzzleOffset } = config;
+  const key = JSON.stringify([map, playerRadius, playerHeight, bulletHeight, muzzleOffset]);
+  let grid = grids.get(key);
+  if (!grid) {
+    grid = NavGrid.build(map, config);
+    if (grids.size >= GRID_CACHE_SIZE) grids.delete(grids.keys().next().value!);
+    grids.set(key, grid);
+  }
+  return grid;
+}
+
+type Maneuver = { kind: 'dodge' | 'evade' | 'escape'; dir: Direction; until: number; bulletId?: string };
 
 function sign(d: Direction): { axis: 'x' | 'y'; s: number } {
   const v = DIR_VECTOR[d];
@@ -59,12 +80,14 @@ export class BotBrain {
   private lastThink = -Infinity;
   private behavior: Behavior = 'wander';
   private attackTarget: PlayerId | null = null;
-  private maneuver: { dir: Direction; until: number } | null = null; // dodge / evade / escape
+  private maneuver: Maneuver | null = null;
   private path: { points: Vec2[]; runs: Direction[]; index: number; goal: Vec2; plannedAt: number } | null = null;
   private aimedSince: number | null = null;
   private reaction = 0;
-  private lastShotAt = -Infinity;
-  private dodgeRolls = new Map<string, boolean>();
+  private lastShotAt = -Infinity; // when it last pressed fire (the snapshot confirms a shot a little later)
+  private dodgeRolls = new Map<string, Direction | false>(); // per bullet: the side it steps to, or no dodge
+  private planFailedAt = -Infinity;
+  private round = -1;
   private evadeRolledAt = -Infinity;
   private anchor: { pos: Vec2; at: number } | null = null;
 
@@ -79,11 +102,18 @@ export class BotBrain {
     this.rng.rngState = rngStateFromSeed(seed);
   }
 
-  /** Call once per match: builds the navigation grid for the map. */
+  /** What it is doing right now (for tests and debugging). */
+  get doing(): Behavior | Maneuver['kind'] {
+    return this.maneuver ? this.maneuver.kind : this.behavior;
+  }
+
+  /** Call once per match: picks up the (shared) navigation grid for the map. */
   setMatch(map: MapDef, config: Config): void {
-    if (this.map !== map) this.grid = NavGrid.build(map, config);
+    this.grid = gridFor(map, config);
     this.map = map;
     this.config = config;
+    this.dodgeRolls.clear(); // bullet ids restart every match
+    this.round = -1;
     this.reset();
   }
 
@@ -98,7 +128,14 @@ export class BotBrain {
       this.reset();
       return { moveDir: null, shoot: false };
     }
+    if (state.roundNumber !== this.round) {
+      this.round = state.roundNumber; // a new round: new positions, nothing planned still holds
+      this.reset();
+    }
     const enemies = state.players.filter((p) => p.id !== meId && p.alive && p.connected);
+
+    // A dodge ends as soon as that bullet can no longer hit.
+    if (this.maneuver?.kind === 'dodge' && this.incoming(state.bullets, me)?.id !== this.maneuver.bulletId) this.maneuver = null;
 
     if (now - this.lastThink >= this.profile.thinkMs) {
       this.lastThink = now;
@@ -111,7 +148,7 @@ export class BotBrain {
     if (this.behavior === 'attack') {
       const target = enemies.find((p) => p.id === this.attackTarget);
       if (target) {
-        const decision = this.attack(me, target, now);
+        const decision = this.attack(state, me, target, now);
         if (decision) return decision;
       }
       this.behavior = 'chase'; // the shot is gone (target moved or died): back to chasing
@@ -135,30 +172,41 @@ export class BotBrain {
     const { dodgeChance, evadeChance } = this.profile;
     const options: { behavior: Behavior; score: number; apply: () => void }[] = [];
 
-    // Dodge: the soonest bullet heading at me, rolled once per bullet.
+    // Dodge: the soonest bullet heading at me, rolled once per bullet (and one side per bullet).
+    for (const id of this.dodgeRolls.keys()) if (!state.bullets.some((b) => b.id === id)) this.dodgeRolls.delete(id);
     const bullet = this.incoming(state.bullets, me);
     if (bullet) {
-      let dodge = this.dodgeRolls.get(bullet.id);
-      if (dodge === undefined) {
-        dodge = nextRandom(this.rng) < dodgeChance;
-        this.dodgeRolls.set(bullet.id, dodge);
+      let side = this.dodgeRolls.get(bullet.id);
+      if (side === undefined) {
+        side = nextRandom(this.rng) < dodgeChance ? this.sideToStep(me, bullet.dir) : false;
+        this.dodgeRolls.set(bullet.id, side);
       }
-      if (dodge) {
+      if (side) {
+        const dodging = this.maneuver?.kind === 'dodge' && this.maneuver.bulletId === bullet.id;
+        const perp = sign(bullet.dir).axis === 'x' ? 'y' : 'x';
+        const clear = Math.max(0, this.config!.playerRadius + DODGE_CLEARANCE - Math.abs(bullet.pos[perp] - me.pos[perp]));
+        const ms = (clear / this.config!.playerSpeed) * 1000 + 50;
         options.push({
           behavior: 'dodge',
           score: UTILITY.dodge,
-          apply: () => this.sidestep(me, bullet.dir, now + bullet.tti * 1000 + 150),
+          apply: () => {
+            if (!dodging) this.startManeuver({ kind: 'dodge', dir: side, until: now + ms, bulletId: bullet.id });
+          },
         });
       }
     }
 
-    // Evade: an enemy has me in its sights and I can't fire first (not facing it).
-    const threat = enemies.find((e) => this.hasShot(e, me) && !this.facingShot(me, e));
+    // Evade: an enemy has me in its sights and I can't fire first.
+    const threat = enemies.find((e) => this.hasShot(e, me) && !this.canFireFirst(me, e));
     if (threat && now - this.evadeRolledAt > 1000) {
       this.evadeRolledAt = now;
       if (nextRandom(this.rng) < evadeChance) {
         const line = this.lineDir(threat, me)!;
-        options.push({ behavior: 'evade', score: UTILITY.evade, apply: () => this.sidestep(me, line, now + 350) });
+        options.push({
+          behavior: 'evade',
+          score: UTILITY.evade,
+          apply: () => this.startManeuver({ kind: 'evade', dir: this.sideToStep(me, line), until: now + 350 }),
+        });
       }
     }
 
@@ -208,7 +256,7 @@ export class BotBrain {
   // ---- behaviors ----
 
   /** Face and fire at a lined-up target; null once it is no longer lined up. */
-  private attack(me: P, target: P, now: number): BotInput | null {
+  private attack(state: DynamicState, me: P, target: P, now: number): BotInput | null {
     const want = this.lineUp(me, target);
     if (want === null) return null;
     const cfg = this.config!;
@@ -223,7 +271,11 @@ export class BotBrain {
       this.aimedSince = now;
       this.reaction = this.nextReactionMs();
     }
-    const ready = now - this.aimedSince >= this.reaction && now - this.lastShotAt >= cfg.cadence;
+    // The gun's readiness by the authoritative clock: its own last shot in the snapshot
+    // (−Infinity, sent as null, means never). The local guard stops a second press before
+    // the snapshot has caught up with the first.
+    const lastShot = typeof me.lastShotAt === 'number' ? me.lastShotAt : -Infinity;
+    const ready = now - this.aimedSince >= this.reaction && state.time - lastShot >= cfg.cadence && now - this.lastShotAt >= 150;
     if (ready) {
       this.lastShotAt = now;
       this.aimedSince = null;
@@ -231,7 +283,13 @@ export class BotBrain {
     return { moveDir: null, shoot: ready };
   }
 
-  private sidestep(me: P, lineDir: Direction, until: number): void {
+  private startManeuver(m: Maneuver): void {
+    this.maneuver = m;
+    this.path = null;
+  }
+
+  /** Which way to step off a line: toward the side with more room (a coin flip on a tie). */
+  private sideToStep(me: P, lineDir: Direction): Direction {
     const grid = this.grid!;
     const [a, b] = perpendicular(lineDir);
     const room = (d: Direction) => {
@@ -242,14 +300,12 @@ export class BotBrain {
     };
     const ra = room(a);
     const rb = room(b);
-    const dir = ra === rb ? (nextRandom(this.rng) < 0.5 ? a : b) : ra > rb ? a : b;
-    this.maneuver = { dir, until };
-    this.path = null;
+    return ra === rb ? (nextRandom(this.rng) < 0.5 ? a : b) : ra > rb ? a : b;
   }
 
   private wander(me: P, now: number): Direction | null {
-    if (!this.path || this.path.index >= this.path.points.length) {
-      for (let tries = 0; tries < 20; tries++) {
+    if ((!this.path || this.path.index >= this.path.points.length) && now - this.planFailedAt >= RETRY_PLAN_MS) {
+      for (let tries = 0; tries < 5; tries++) {
         const goal = { x: nextRandom(this.rng) * this.map!.board.width, y: nextRandom(this.rng) * this.map!.board.height };
         if (this.grid!.walkable(goal) && this.plan(me, goal, now)) break;
       }
@@ -257,19 +313,25 @@ export class BotBrain {
     return this.path ? this.advance(me) : null;
   }
 
-  /** Follow a path to `goal`, replanning when the goal moved or the plan went stale. */
+  /**
+   * Follow a path to `goal` (or the reachable place nearest it), replanning when the goal
+   * moved or the plan went stale. With no usable path — already as close as paths get, or
+   * none at all — it heads straight for the goal's row or column, and doesn't search again
+   * for a while (a failed search expands everything reachable: too slow for every frame).
+   */
   private follow(me: P, goal: Vec2, now: number): Direction | null {
     const p = this.path;
     const stale = !p || p.index >= p.points.length || now - p.plannedAt > REPLAN_MS || Math.hypot(p.goal.x - goal.x, p.goal.y - goal.y) > 1.5;
-    if (stale && !this.plan(me, goal, now)) return null;
-    return this.advance(me);
+    if (stale && (now - this.planFailedAt < RETRY_PLAN_MS || !this.plan(me, goal, now, true))) return direct(me, goal);
+    return this.advance(me) ?? direct(me, goal);
   }
 
-  private plan(me: P, goal: Vec2, now: number): boolean {
+  private plan(me: P, goal: Vec2, now: number, orNearest = false): boolean {
     const grid = this.grid!;
-    const points = grid.findPath(me.pos, goal, me.facing);
+    const points = grid.findPath(me.pos, goal, me.facing, orNearest);
     if (!points || points.length === 0) {
       this.path = null;
+      this.planFailedAt = now;
       return false;
     }
     const runs: Direction[] = [];
@@ -307,9 +369,8 @@ export class BotBrain {
     if (dir !== null && now - this.anchor.at > STUCK_MS && !this.maneuver) {
       const options = DIRECTIONS.filter((d) => d !== dir);
       const escape = options[Math.floor(nextRandom(this.rng) * options.length)]!;
-      this.maneuver = { dir: escape, until: now + 500 + nextRandom(this.rng) * 300 };
+      this.startManeuver({ kind: 'escape', dir: escape, until: now + 500 + nextRandom(this.rng) * 300 });
       this.anchor = null;
-      this.path = null;
       dir = escape;
     }
     return { moveDir: dir, shoot: false };
@@ -335,9 +396,10 @@ export class BotBrain {
     return dir !== null && shooter.facing === dir && lineOfFireClear(shooter.pos, victim.pos, this.map!.obstacles, this.config!.bulletHeight);
   }
 
-  /** Is `me` already facing `enemy` on a line where its bullet would hit? */
-  private facingShot(me: P, enemy: P): boolean {
-    return this.hasShot(me, enemy);
+  /** Would `me` fire at `enemy` right now — lined up within its own aim, and facing it? */
+  private canFireFirst(me: P, enemy: P): boolean {
+    const want = this.lineUp(me, enemy);
+    return want !== null && me.facing === want;
   }
 
   /** The direction from `from` to `to` if they share a row/column within a body radius (a bullet's hit width). */
@@ -377,7 +439,18 @@ export class BotBrain {
     this.aimedSince = null;
     this.anchor = null;
     this.lastThink = -Infinity;
+    this.planFailedAt = -Infinity;
   }
+}
+
+/** Straight for the goal's row or column (whichever is nearer), to line up on it. */
+function direct(me: P, goal: Vec2): Direction | null {
+  const dx = goal.x - me.pos.x;
+  const dy = goal.y - me.pos.y;
+  if (Math.abs(dx) < REACHED && Math.abs(dy) < REACHED) return null;
+  if (Math.abs(dx) < REACHED) return toward('y', dy);
+  if (Math.abs(dy) < REACHED) return toward('x', dx);
+  return Math.abs(dx) <= Math.abs(dy) ? toward('x', dx) : toward('y', dy);
 }
 
 function dist(a: P, b: P): number {

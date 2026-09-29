@@ -23,7 +23,7 @@ export type BotProfile = {
 export const DIFFICULTY: Record<Difficulty, BotProfile> = {
   easy: { thinkMs: 300, reactionMs: [400, 700], alignTolerance: 0.45, dodgeChance: 0, evadeChance: 0, targeting: 'nearest' },
   normal: { thinkMs: 150, reactionMs: [200, 350], alignTolerance: 0.3, dodgeChance: 0.5, evadeChance: 0.3, targeting: 'shootable' },
-  hard: { thinkMs: 60, reactionMs: [80, 150], alignTolerance: 0.2, dodgeChance: 0.9, evadeChance: 0.7, targeting: 'exposed' },
+  hard: { thinkMs: 60, reactionMs: [80, 150], alignTolerance: 0.25, dodgeChance: 0.9, evadeChance: 0.7, targeting: 'exposed' },
 };
 
 export const DIFFICULTY_LABEL: Record<Difficulty, string> = { easy: 'Easy', normal: 'Normal', hard: 'Hard' };
