@@ -89,6 +89,21 @@ describe('LocalSession (practice)', () => {
     expect(snap().state.players[0]!.pos.x).not.toBeCloseTo(x0, 3);
   });
 
+  // Regression: the practice UI auto-starts from inside its listener as soon as the first
+  // lobby message arrives — which happens while join() is still running.
+  it('accepts a message sent from inside a listener during start()', async () => {
+    const session = new LocalSession({ seed: 5 });
+    const inbox: ServerMessage[] = [];
+    let pending: Promise<void> | null = null;
+    session.onMessage((m) => {
+      inbox.push(m);
+      if (m.type === 'lobby' && m.canStart && pending === null) pending = session.send({ type: 'startMatch' });
+    });
+    session.start('Solo');
+    await pending;
+    expect(inbox.some((m) => m.type === 'matchStart')).toBe(true);
+  });
+
   it('close() stops delivery', async () => {
     const { session, inbox } = started();
     await session.send({ type: 'startMatch' });
