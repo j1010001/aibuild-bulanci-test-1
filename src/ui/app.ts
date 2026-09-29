@@ -4,6 +4,7 @@
 // ClientMessages to the current Session.
 
 import { hudModel } from '../client/hud';
+import { lastRoomAfter, parseLastRoom, type LastRoom } from '../client/lastRoom';
 import { InputSender } from '../client/inputSender';
 import { LocalSession } from '../client/localSession';
 import { backToLobby, initialView, playerName, reduce, type ClientView } from '../client/model';
@@ -14,7 +15,7 @@ import { SKIN_PALETTE } from '../session/skins';
 import { h, option } from './dom';
 
 
-/** Opens a multiplayer session to the game server; null until the server exists (M2). */
+/** Opens a multiplayer session to the game server; null disables Create/Join (no server configured). */
 export type Connect = (name: string, target: JoinTarget) => Session;
 
 const NAME_KEY = 'bps.name';
@@ -50,13 +51,9 @@ function skinColor(skinId: string): string {
   return SKIN_PALETTE.includes(skinId) ? skinId : '#888';
 }
 
-type LastRoom = { code: string; reconnectToken: string };
-
 function loadLastRoom(): LastRoom | null {
   try {
-    const raw = sessionStorage.getItem(LAST_ROOM_KEY);
-    const v = raw ? (JSON.parse(raw) as Partial<LastRoom>) : null;
-    return v && typeof v.code === 'string' && typeof v.reconnectToken === 'string' ? { code: v.code, reconnectToken: v.reconnectToken } : null;
+    return parseLastRoom(sessionStorage.getItem(LAST_ROOM_KEY));
   } catch {
     return null;
   }
@@ -87,6 +84,8 @@ export class App {
   private hudKey = '';
   private autoStartSent = false;
   private readonly keyboard: KeyboardBinding;
+  private target: JoinTarget | null = null; // how the current multiplayer session entered its room
+  private connecting = false; // a multiplayer session is open but not yet in a room
 
   constructor(
     private readonly root: HTMLElement,
@@ -109,11 +108,14 @@ export class App {
   startMultiplayer(target: JoinTarget, name = this.name): void {
     if (!this.connect) return;
     this.attach(this.connect(name, target));
+    this.target = target;
+    this.connecting = true;
+    this.draw();
   }
 
   leave(): void {
     void this.session?.send({ type: 'leave' });
-    if (!this.local) saveLastRoom(null); // leaving on purpose: nothing to rejoin
+    if (this.session && !this.local) saveLastRoom(null); // leaving on purpose: nothing to rejoin
     this.detach();
     this.view = initialView();
     this.draw();
@@ -147,6 +149,8 @@ export class App {
     this.session = null;
     this.local = null;
     this.input = null;
+    this.target = null;
+    this.connecting = false;
   }
 
   private onSessionClosed(session: Session, reason: string): void {
@@ -171,11 +175,26 @@ export class App {
       this.input?.reset(); // the new match's game starts with nobody moving
       this.keyboard.resync(); // …so re-send whatever direction is held right now
     }
-    if (msg.type === 'roomJoined' && !this.local) saveLastRoom({ code: msg.code, reconnectToken: msg.reconnectToken });
-    if (msg.type === 'replaced') saveLastRoom(null); // the other tab owns this seat now
-    if (msg.type === 'joinRejected') {
-      if (msg.reason === 'badToken' || msg.reason === 'notFound') saveLastRoom(null);
+    if (!this.local && (msg.type === 'roomJoined' || msg.type === 'replaced' || msg.type === 'joinRejected')) {
+      saveLastRoom(lastRoomAfter(loadLastRoom(), msg, false));
+    }
+    if (msg.type === 'roomJoined') this.connecting = false;
+    if (msg.type === 'replaced') {
+      // Detach now, so the "opened in another tab" notice isn't overwritten by the
+      // generic "Disconnected" that the server's close would otherwise produce.
       this.detach();
+      this.view = { ...initialView(), error: this.view.error };
+      this.draw();
+      return;
+    }
+    if (msg.type === 'joinRejected') {
+      const target = this.target;
+      this.detach(); // the view keeps `rejected` for the home screen; attach() resets the rest
+      // The seat is gone (the player left the lobby, or the match ended without them) but
+      // the room may still exist: join it afresh instead of giving up.
+      if (msg.reason === 'badToken' && target?.kind === 'rejoin') return this.startMultiplayer({ kind: 'join', code: target.code });
+      this.draw();
+      return;
     }
     if (this.needsRedraw(before)) this.draw();
   }
@@ -197,6 +216,14 @@ export class App {
 
   private draw(): void {
     const v = this.view;
+    if (this.connecting && v.screen === 'home') {
+      this.canvas.style.visibility = 'hidden';
+      this.root.replaceChildren(
+        h('div', { class: 'panel' }, ['Connecting to the game server…', h('button', { on: { click: () => this.leave() } }, ['Cancel'])]),
+      );
+      this.root.dataset.screen = 'home';
+      return;
+    }
     // Keep the focus (and caret) in a settings field across a redraw triggered by someone else.
     const focused = document.activeElement instanceof HTMLElement ? document.activeElement.dataset.key : undefined;
     this.canvas.style.visibility = v.screen === 'match' || v.screen === 'matchEnd' ? 'visible' : 'hidden';
@@ -217,7 +244,7 @@ export class App {
       saveName(n);
       return n;
     };
-    const noServer = this.connect ? undefined : 'Multiplayer needs the game server (milestone M2).';
+    const noServer = this.connect ? undefined : 'No game server is configured.';
     const join = () => {
       const code = codeInput.value.trim().toUpperCase();
       if (code.length >= 5) this.startMultiplayer({ kind: 'join', code }, currentName());

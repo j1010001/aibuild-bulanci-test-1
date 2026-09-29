@@ -806,13 +806,19 @@ the default is a map whose author never chose.
 - **Everyone leaves**: the server discards the room once no player is connected, calling
   `Room.dispose()`, which ends any running match and frees its physics world. (A practice
   room would otherwise never end on its own.)
-- **Server unreachable or connection lost**: the client returns to the home screen with a
-  "Disconnected" notice. The room code and reconnect token are kept per tab
-  (`sessionStorage`), so the home screen offers "Rejoin room CODE" — also after a page
-  reload. A rejoin the server refuses (`badToken`, `notFound`) clears it, as does leaving
-  on purpose or being replaced by another tab. Note that in a two-player match a drop
-  ends the match at once (§10), so there is nothing to rejoin; with three or more
-  players the match continues and the rejoin restores the player.
+- **Server unreachable or connection lost**: while connecting, the client shows
+  "Connecting to the game server…" with Cancel, and gives up after 5 s ("could not reach
+  the game server"; a malformed server address is reported the same way instead of
+  throwing). A drop after connecting returns to the home screen with "Disconnected:
+  connection lost". The room code and reconnect token are kept per tab
+  (`sessionStorage`, validated when read back), so the home screen offers "Rejoin room
+  CODE" — also after a page reload. If the seat no longer exists (the player dropped out
+  of the lobby, or the match ended without them) the rejoin is refused with `badToken`
+  and the client joins the same room afresh instead. `notFound`, leaving on purpose, or
+  being replaced by another tab ("This game was opened in another tab or window.")
+  forget the room. Note that in a two-player match a drop ends the match at once (§10);
+  with three or more players the match continues and the rejoin restores the player,
+  score and all.
 - **No fair-spawn board**: editor blocks/warns at save; runtime falls back to edge-margin
   placement rather than hanging.
 - **Shoot before any move**: use the spawn default facing.

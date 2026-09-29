@@ -4,22 +4,17 @@
 // harness can send via window.GameClient.
 
 import { renderStateAt } from './client/interpolate';
+import { renderStateOf } from './client/model';
 import type { ClientView } from './client/model';
 import type { GameApi } from './api';
 import { ensureRapierReady } from './physics/rapier';
 import { Renderer } from './render';
 import type { ClientMessage } from './session/protocol';
 import { NetSession } from './net/client';
+import { serverUrl } from './net/serverUrl';
 import { App } from './ui/app';
 
-/** The one setting that says where the game server is (spec §4). Defaults to port 8787 on
- * the host that served this page, so other devices on the same network can play too. */
-function serverUrl(): string {
-  const configured = import.meta.env.VITE_SERVER_URL as string | undefined;
-  if (configured) return configured;
-  const scheme = location.protocol === 'https:' ? 'wss' : 'ws';
-  return `${scheme}://${location.hostname}:8787`;
-}
+const SERVER_URL = serverUrl(import.meta.env.VITE_SERVER_URL as string | undefined, location);
 
 const FIXED_DT = 1 / 60;
 const MAX_CATCHUP_STEPS = 8; // guards against a huge dt after a tab was backgrounded
@@ -29,7 +24,7 @@ const root = document.getElementById('ui') as HTMLElement;
 
 async function main(): Promise<void> {
   await ensureRapierReady(); // practice runs the physics in the page
-  const app = new App(root, canvas, (name, target) => new NetSession(serverUrl(), target, name));
+  const app = new App(root, canvas, (name, target) => new NetSession(SERVER_URL, target, name));
   const renderer = new Renderer(canvas);
 
   let paused = false;
@@ -53,7 +48,10 @@ async function main(): Promise<void> {
       accumulator = 0; // no burst catch-up after a pause
     }
 
-    const rs = renderStateAt(app.view, now);
+    // Interpolate on the same clock that stamped the snapshots (performance.now(), not the
+    // frame timestamp, which is earlier). A paused practice harness steps time itself, so
+    // show exactly the latest state rather than a blend toward it.
+    const rs = hold ? renderStateOf(app.view) : renderStateAt(app.view, performance.now());
     if (rs && (app.view.screen === 'match' || app.view.screen === 'matchEnd')) renderer.render(rs);
     app.frame(now);
     requestAnimationFrame(frame);

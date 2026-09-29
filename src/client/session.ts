@@ -1,5 +1,5 @@
 // What the UI talks to: a connection to one Room. Practice (LocalSession, in-process) and
-// multiplayer (the WebSocket client, M2) implement the same interface, so the screens,
+// multiplayer (NetSession, over WebSocket) implement the same interface, so the screens,
 // input and rendering never know which one they're using.
 
 import type { ClientMessage, ServerMessage } from '../session/protocol';

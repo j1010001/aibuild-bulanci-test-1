@@ -5,24 +5,60 @@
 import type { JoinTarget, Session } from '../client/session';
 import type { ClientMessage, ServerMessage } from '../session/protocol';
 
+export type NetSessionOptions = {
+  /** For tests: a WebSocket-compatible constructor. */
+  WebSocketImpl?: typeof WebSocket;
+  /** Give up if the socket hasn't opened by then. */
+  connectTimeoutMs?: number;
+  /** Messages kept while connecting (the join request is always first); later ones are dropped. */
+  maxQueued?: number;
+};
+
 export class NetSession implements Session {
-  private readonly ws: WebSocket;
+  private readonly ws: WebSocket | null;
+  private readonly Impl: typeof WebSocket;
   private readonly queue: string[] = [];
+  private readonly maxQueued: number;
   private readonly listeners = new Set<(msg: ServerMessage) => void>();
   private readonly closeListeners = new Set<(reason: string) => void>();
+  private connectTimer: ReturnType<typeof setTimeout> | null = null;
+  private opened = false;
   private closed = false;
 
-  constructor(url: string, target: JoinTarget, name: string) {
-    this.ws = new WebSocket(url);
+  constructor(url: string, target: JoinTarget, name: string, opts: NetSessionOptions = {}) {
+    this.Impl = opts.WebSocketImpl ?? WebSocket;
+    this.maxQueued = opts.maxQueued ?? 64;
     // The join request goes first, so anything the UI sends meanwhile follows it.
     this.queue.push(JSON.stringify(joinMessage(target, name)));
-    this.ws.addEventListener('open', () => {
-      for (const text of this.queue.splice(0)) this.ws.send(text);
+
+    let ws: WebSocket | null = null;
+    try {
+      ws = new this.Impl(url);
+    } catch {
+      // A malformed URL or blocked port throws here; report it like any other failed
+      // connection, after the caller has had a chance to subscribe to onClose.
+      queueMicrotask(() => this.finish('invalid game server address'));
+    }
+    this.ws = ws;
+    if (!ws) return;
+
+    this.connectTimer = setTimeout(() => {
+      if (!this.opened) {
+        ws.close();
+        this.finish('could not reach the game server');
+      }
+    }, opts.connectTimeoutMs ?? 5000);
+
+    ws.addEventListener('open', () => {
+      this.opened = true;
+      this.clearTimer();
+      for (const text of this.queue.splice(0)) ws.send(text);
     });
-    this.ws.addEventListener('message', (e) => {
+    ws.addEventListener('message', (e) => {
+      if (this.closed) return;
       let msg: unknown;
       try {
-        msg = JSON.parse(String(e.data));
+        msg = JSON.parse(String((e as MessageEvent).data));
       } catch {
         return;
       }
@@ -30,14 +66,17 @@ export class NetSession implements Session {
         for (const l of this.listeners) l(msg as ServerMessage);
       }
     });
-    this.ws.addEventListener('close', (e) => this.finish(e.reason || closeReason(e.code)));
+    ws.addEventListener('close', (e) => {
+      const { code, reason } = e as CloseEvent;
+      this.finish(reason || closeReason(code, this.opened));
+    });
   }
 
   send(msg: ClientMessage): void {
-    if (this.closed) return;
+    if (this.closed || !this.ws) return;
     const text = JSON.stringify(msg);
-    if (this.ws.readyState === WebSocket.OPEN) this.ws.send(text);
-    else if (this.ws.readyState === WebSocket.CONNECTING) this.queue.push(text);
+    if (this.ws.readyState === this.Impl.OPEN) this.ws.send(text);
+    else if (this.ws.readyState === this.Impl.CONNECTING && this.queue.length < this.maxQueued) this.queue.push(text);
   }
 
   onMessage(listener: (msg: ServerMessage) => void): () => void {
@@ -52,13 +91,19 @@ export class NetSession implements Session {
 
   close(): void {
     if (this.closed) return;
-    this.ws.close(1000, 'left');
+    this.ws?.close(1000, 'left');
     this.finish('left');
+  }
+
+  private clearTimer(): void {
+    if (this.connectTimer !== null) clearTimeout(this.connectTimer);
+    this.connectTimer = null;
   }
 
   private finish(reason: string): void {
     if (this.closed) return;
     this.closed = true;
+    this.clearTimer();
     this.listeners.clear();
     for (const l of this.closeListeners) l(reason);
     this.closeListeners.clear();
@@ -76,19 +121,8 @@ function joinMessage(target: JoinTarget, name: string): ClientMessage {
   }
 }
 
-function closeReason(code: number): string {
-  switch (code) {
-    case 1006:
-      return 'could not reach the game server';
-    case 1008:
-      return 'too many messages';
-    case 1009:
-      return 'message too large';
-    case 1013:
-      return 'the server is full';
-    case 4000:
-      return 'opened in another tab';
-    default:
-      return 'connection closed';
-  }
+/** For closes without a server-supplied reason (the server sends one for its own closes). */
+function closeReason(code: number, opened: boolean): string {
+  if (code === 1006) return opened ? 'connection lost' : 'could not reach the game server';
+  return opened ? 'connection closed' : 'could not reach the game server';
 }
