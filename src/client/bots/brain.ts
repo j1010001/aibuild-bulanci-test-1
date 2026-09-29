@@ -67,7 +67,6 @@ export class BotBrain {
   private dodgeRolls = new Map<string, boolean>();
   private evadeRolledAt = -Infinity;
   private anchor: { pos: Vec2; at: number } | null = null;
-  private lastMove: Direction | null = null;
 
   constructor(
     private readonly profile: BotProfile,
@@ -229,7 +228,6 @@ export class BotBrain {
       this.lastShotAt = now;
       this.aimedSince = null;
     }
-    this.lastMove = null;
     return { moveDir: null, shoot: ready };
   }
 
@@ -269,13 +267,13 @@ export class BotBrain {
 
   private plan(me: P, goal: Vec2, now: number): boolean {
     const grid = this.grid!;
-    const points = grid.findPath(me.pos, goal);
+    const points = grid.findPath(me.pos, goal, me.facing);
     if (!points || points.length === 0) {
       this.path = null;
       return false;
     }
     const runs: Direction[] = [];
-    let prev = grid.snapToPath(me.pos);
+    let prev = me.pos; // a path starts from where the bot actually is
     for (const pt of points) {
       runs.push(Math.abs(pt.x - prev.x) > Math.abs(pt.y - prev.y) ? toward('x', pt.x - prev.x) : toward('y', pt.y - prev.y));
       prev = pt;
@@ -314,7 +312,6 @@ export class BotBrain {
       this.path = null;
       dir = escape;
     }
-    this.lastMove = dir;
     return { moveDir: dir, shoot: false };
   }
 
@@ -379,7 +376,6 @@ export class BotBrain {
     this.path = null;
     this.aimedSince = null;
     this.anchor = null;
-    this.lastMove = null;
     this.lastThink = -Infinity;
   }
 }
