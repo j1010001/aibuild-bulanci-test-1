@@ -171,3 +171,43 @@ describe('PhysicsWorld: the gun collides where it is drawn (M0 task 2)', () => {
     expect(world.raycastBullet({ x: 5.6, y: 10 }, '+X', 10, BULLET_HEIGHT)).toBeNull();
   });
 });
+
+describe("PhysicsWorld: another player's gun is solid to your body (review follow-up)", () => {
+  // p0 at (20, 20) facing +X: its barrel spans x 20.5..20.8 around y 20, at bullet height.
+  function withP0(): PhysicsWorld {
+    const world = worldWith([]);
+    world.addPlayer('p0', { x: 20, y: 20 });
+    world.setPlayerFacing('p0', '+X');
+    return world;
+  }
+
+  it('a body coming from the side stops against the gun instead of walking into it', () => {
+    const world = withP0();
+    world.addPlayer('p1', { x: 20.65, y: 22 });
+    const advance = world.moveDistance('p1', '-Y', 5);
+    expect(22 - advance).toBeGreaterThan(20.04 + PLAYER_RADIUS - 0.01); // body edge stops at the barrel
+  });
+
+  it('bullets pass through guns: a shot at p0 from the front hits its body, not its barrel', () => {
+    const world = withP0();
+    const hit = world.raycastBullet({ x: 25, y: 20 }, '-X', 10, BULLET_HEIGHT);
+    expect(hit?.hitPlayerId).toBe('p0');
+    expect(hit!.distance).toBeCloseTo(25 - 20.5, 2);
+  });
+
+  it('guns never block guns: turning your gun across another gun is allowed', () => {
+    const world = withP0();
+    world.addPlayer('p1', { x: 20.75, y: 20.75 }); // bodies clear of each other and of p0's gun
+    expect(world.gunFits('p1', { x: 20.75, y: 20.75 }, '-Y')).toBe(true); // p1's barrel would cross p0's
+  });
+
+  it('the gun collider turns with the player', () => {
+    const world = withP0();
+    world.setPlayerFacing('p0', '+Y'); // the barrel now spans y 20.5..20.8 around x 20
+    world.addPlayer('p1', { x: 20.65, y: 22 });
+    expect(world.moveDistance('p1', '-Y', 5)).toBeGreaterThan(22 - 20.5 - 0.001 - 0.5 - 0.3); // old spot is free…
+    world.addPlayer('p2', { x: 22, y: 20.65 });
+    const advance = world.moveDistance('p2', '-X', 5);
+    expect(22 - advance).toBeGreaterThan(20.04 + PLAYER_RADIUS - 0.01); // …and the new one blocks
+  });
+});

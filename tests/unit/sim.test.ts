@@ -85,6 +85,18 @@ describe('movement collision (§7, §8) — real physics; geometry-level coverag
   });
 });
 
+describe('the gun over low walls (§8, M0 task 2)', () => {
+  it('turning toward a wall lower than bullet height is allowed even when closer than the muzzle', () => {
+    const lowWall: ObstacleDef = { id: 'w', type: 'cube', pos: { x: 10, y: 10 }, params: { w: 2, d: 2, h: 0.6 } };
+    const s = game([lowWall], ['A']);
+    s.players[0]!.pos = { x: 8.35, y: 10 }; // muzzle at +X would reach 9.15, past the wall's edge at 9
+    s.players[0]!.facing = '+Y';
+    const result = step(s, { p0: { moveDir: '+X', shoot: false } }, 1 / 60);
+    expect(result.events.some((e) => e.kind === 'turnRefused')).toBe(false);
+    expect(result.state.players[0]!.facing).toBe('+X');
+  });
+});
+
 describe('shooting and bullets (§9) — real physics', () => {
   it('a bullet passes through an open arch door and kills the far player', () => {
     const arch: ObstacleDef = { id: 'a', type: 'arch', pos: { x: 20, y: 20 }, params: { w: 6, d: 1, doorWidth: 2, doorHeight: 2, axis: 'y' } };
