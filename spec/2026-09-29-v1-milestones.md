@@ -10,6 +10,7 @@ Status: approved. The design authority is still `spec/2026-09-15-browser-party-s
 | M0 | Done: seeded RNG; player shape from one definition (gun collides where drawn, and is solid to other bodies); map loader and validator (every map enters a game through it); spec cleanup, with rooms capped at 8 players (operator decision). |
 | M1 | Done: shared `Room` + protocol (`src/session`), client view model, practice via `LocalSession`, screens and HUD. |
 | M2 | Done: authoritative server (`server/`), `NetSession` + interpolation + rejoin in the browser, headless bots + `npm run bot`, two-browser Playwright smoke test. |
+| M2.5 | Not started (added 2026-09-29): local play against bots with difficulty levels. |
 | M3, M4 | Not started. |
 
 Deviation from the plan: until M3 (editor) exists, a room's map is chosen **by id from a built-in catalog** (`src/session/maps.ts`), so no client-supplied map data reaches the server. Every map, catalog maps included, already passes through the map loader in `GameApi.start`; custom maps will too.
@@ -131,6 +132,22 @@ The full game loop in one browser via Practice. The UI and room model built here
   - **Playwright** two-tab smoke test (§15) against the local server
   - **isolation check**: compiling the server with its own tsconfig is part of `npm run build`
 
+### M2.5 — Local play vs bots → `v0.3.5` (medium–large)
+Play in the browser against N computer opponents, all free-for-all (bots fight each other and you). Also the best tool yet for testing the game: seeded, reproducible bot matches on every map. Decisions (operator, 2026-09-29): **one difficulty level for all bots in a game** (Easy / Normal / Hard); **local only** for now (bots in online rooms can come later — same brain, same Room).
+
+How the AI works (no LLM, no learning — standard game-AI techniques):
+- **Perception, honest by construction**: a bot sees only what a player sees (the snapshot, the map, events) and acts only through the same input messages (`InputSender`). It derives what it needs: who's alive and where, who's lined up with whom, whether a wall blocks a shot (line of fire), which bullets are heading its way.
+- **Navigation**: a grid over the board marking where a player's body fits (computed once per map, from the physics world), and A* pathfinding over it, so bots route around walls instead of walking into them.
+- **Decisions — utility AI**: on a short timer each bot scores a few behaviors and does the best one: *attack* (line up with a target that has a clear line of fire, fire), *chase* (path toward the chosen target), *dodge* (step out of an incoming bullet's line), *take cover* (break line of fire behind a wall when threatened), *wander* (no target known).
+- **Difficulty = the same brain with different settings**: reaction delay before firing, how often it re-decides, how precisely it lines up before firing (aim), how often it dodges, and how it picks targets. Easy: slow, sloppy, never dodges. Hard: quick, precise, usually dodges.
+
+Tasks:
+1. **Navigation grid + A\*** (`src/client/bots/navigation.ts`, pure): walkable cells from the map (a player's body fits), shortest axis-aligned path, path smoothing into straight runs. Tests: paths around walls and through arch doors, no path through low slots, unreachable targets handled.
+2. **Bot brain** (`src/client/bots/brain.ts`): perception helpers, the five behaviors with utility scores, difficulty profiles (`easy` / `normal` / `hard`), replacing today's chase-and-shoot inside `BotPlayer` (keeping its seeded randomness, throttling and lobby behavior). Tests per behavior with scripted snapshots (like the existing `ScriptedSession` tests).
+3. **Local match**: a `LocalMatchSession` (in-page Room with the human plus N bots through `InProcessSession`; the page loop ticks the room and steps the bots), normal round and match rules. Headless use: the same setup runs in tests and via `window.GameClient`.
+4. **UI**: Home → "Play vs bots" → a setup screen (bot count 1–7, difficulty, map, target score) → match; bots named e.g. "Bot 2 (Hard)" in the HUD; match end → play again / home.
+5. **Tests**: navigation and behavior units; every map, every difficulty: seeded bot-only matches finish with a winner; **difficulty ranking**: over 20 seeded matches, hard bots beat easy bots in most of them (a measurable check that the levels mean something); a Playwright test that plays a local match against bots to the end.
+
 ### M3 — Level editor → `v0.4.0` (medium–large)
 - **Headless `EditorApi`** (`src/editor/model.ts`): place, move, resize, set axis, delete, and set board size, on immutable drafts.
 - 2D top-down surface whose footprints (including the donut hole and door gap) are derived from `buildObstacleGeometry`, plus a live 3D preview via `Renderer.loadMap`.
@@ -145,6 +162,7 @@ The full game loop in one browser via Practice. The UI and room model built here
 - A final pass so every §15 test exists and passes.
 
 **Order rationale:**
+- M2.5 (local play vs bots) goes before the editor at the operator's request: it adds a playable mode without a server, and seeded bot matches become the main way to test game rules and, later, editor-made maps.
 - M0 comes first because the seeded RNG and the map loader are prerequisites for both the server (maps arrive over the network, and replays must match) and the editor (feasibility checks must be deterministic).
 - M1 builds the room model in shared code, which makes M2 mostly transport.
 - The editor is independent of the server, so M2 and M3 can swap or run in parallel.
