@@ -167,6 +167,7 @@ describe('PhysicsWorld: the gun collides where it is drawn (M0 task 2)', () => {
     world.addPlayer('p1', { x: 6.2, y: 10 });
     world.setPlayerEnabled('p1', false);
     expect(world.gunFits('p0', { x: 5, y: 10 }, '+X')).toBe(true);
-    expect(world.raycastBullet({ x: 1, y: 10 }, '+X', 10, BULLET_HEIGHT)).toBeNull();
+    // from just past p0's body edge (5.5): only p1 (5.7..6.7) is on this path
+    expect(world.raycastBullet({ x: 5.6, y: 10 }, '+X', 10, BULLET_HEIGHT)).toBeNull();
   });
 });
