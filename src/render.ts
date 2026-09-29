@@ -10,12 +10,30 @@ import * as THREE from 'three';
 import { AZIMUTH, computeCameraBasis, POLAR_FROM_VERTICAL } from './camera';
 import { buildObstacleGeometry } from './geometry/obstacleGeometry';
 import type { BoxSpec, ConeSpec, PartSpec, TrimeshSpec } from './geometry/obstacleGeometry';
-import type { CubeParams, DonutParams, ObstacleDef, Player, PublicState } from './sim';
+import type { RenderState } from './client/model';
+import type { CubeParams, DonutParams, ObstacleDef, Player } from './sim';
 import { DIR_VECTOR } from './sim';
 
 const VFOV_DEG = 45;
 const SOLID_COLOR = 0x8a6d3b; // solid to bullets (or: always solid, for plain terrain)
 const POROUS_COLOR = 0x5a7a8a; // bullets pass over/through (low wall, blocked-looking variants)
+
+// One geometry + material shared by every bullet: bullets come and go many times a second.
+const BULLET_GEOMETRY = new THREE.SphereGeometry(0.15, 12, 12);
+const BULLET_MATERIAL = new THREE.MeshStandardMaterial({ color: 0xfff3b0, emissive: 0x554400 });
+
+/** Frees the GPU buffers of everything under `root` (removing from the scene alone does not). */
+function disposeTree(root: THREE.Object3D): void {
+  root.traverse((obj) => {
+    if (obj instanceof THREE.Mesh) {
+      if (obj.geometry !== BULLET_GEOMETRY) obj.geometry.dispose();
+      for (const m of Array.isArray(obj.material) ? obj.material : [obj.material]) if (m !== BULLET_MATERIAL) m.dispose();
+    } else if (obj instanceof THREE.LineSegments) {
+      obj.geometry.dispose();
+      (obj.material as THREE.Material).dispose();
+    }
+  });
+}
 
 function facingAngle(dir: keyof typeof DIR_VECTOR): number {
   const v = DIR_VECTOR[dir];
@@ -27,7 +45,6 @@ export class Renderer {
   private scene = new THREE.Scene();
   private camera: THREE.PerspectiveCamera;
   private canvas: HTMLCanvasElement;
-  private hud: HTMLElement | null;
 
   private cameraDir = new THREE.Vector3(0, 1, 0);
   private cameraTarget = new THREE.Vector3();
@@ -38,9 +55,8 @@ export class Renderer {
   private obstacleGroup = new THREE.Group();
   private loadedObstacleSignature = '';
 
-  constructor(canvas: HTMLCanvasElement, hud: HTMLElement | null) {
+  constructor(canvas: HTMLCanvasElement) {
     this.canvas = canvas;
-    this.hud = hud;
     this.renderer = new THREE.WebGLRenderer({ canvas, antialias: true });
     this.renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2));
     this.camera = new THREE.PerspectiveCamera(VFOV_DEG, 1, 0.1, 1000);
@@ -99,13 +115,16 @@ export class Renderer {
   }
 
   /** Rebuilds ground + obstacle meshes and reframes the camera. Cheap to call on map load. */
-  loadMap(state: PublicState): void {
+  loadMap(state: RenderState): void {
     const sig = `${state.config.board.width}x${state.config.board.height}:${state.obstacles.map((o) => o.id).join(',')}`;
     if (sig === this.loadedObstacleSignature) return;
     this.loadedObstacleSignature = sig;
 
     this.boardSize = { ...state.config.board };
-    while (this.obstacleGroup.children.length) this.obstacleGroup.remove(this.obstacleGroup.children[0]!);
+    for (const child of [...this.obstacleGroup.children]) {
+      this.obstacleGroup.remove(child);
+      disposeTree(child);
+    }
 
     const ground = new THREE.Mesh(
       new THREE.PlaneGeometry(state.config.board.width, state.config.board.height),
@@ -129,15 +148,14 @@ export class Renderer {
     this.applyCameraFraming();
   }
 
-  render(state: PublicState): void {
+  render(state: RenderState): void {
     this.loadMap(state);
     this.syncPlayers(state);
     this.syncBullets(state);
     this.renderer.render(this.scene, this.camera);
-    if (this.hud) this.hud.textContent = buildHud(state);
   }
 
-  private syncPlayers(state: PublicState): void {
+  private syncPlayers(state: RenderState): void {
     const seen = new Set<string>();
     for (const p of state.players) {
       seen.add(p.id);
@@ -157,21 +175,19 @@ export class Renderer {
     for (const [id, group] of this.playerGroups) {
       if (!seen.has(id)) {
         this.scene.remove(group);
+        disposeTree(group);
         this.playerGroups.delete(id);
       }
     }
   }
 
-  private syncBullets(state: PublicState): void {
+  private syncBullets(state: RenderState): void {
     const seen = new Set<string>();
     for (const b of state.bullets) {
       seen.add(b.id);
       let mesh = this.bulletMeshes.get(b.id);
       if (!mesh) {
-        mesh = new THREE.Mesh(
-          new THREE.SphereGeometry(0.15, 12, 12),
-          new THREE.MeshStandardMaterial({ color: 0xfff3b0, emissive: 0x554400 }),
-        );
+        mesh = new THREE.Mesh(BULLET_GEOMETRY, BULLET_MATERIAL);
         this.bulletMeshes.set(b.id, mesh);
         this.scene.add(mesh);
       }
@@ -184,15 +200,6 @@ export class Renderer {
       }
     }
   }
-}
-
-function buildHud(state: PublicState): string {
-  const lines = [`round ${state.roundNumber}  phase:${state.phase}${state.winnerId ? `  winner:${state.winnerId}` : ''}`];
-  for (const p of state.players) {
-    const status = !p.connected ? 'disconnected' : p.alive ? 'alive' : 'dead';
-    lines.push(`${p.name.padEnd(10)} score:${state.scores[p.id] ?? 0}  ${status}  facing:${p.facing}`);
-  }
-  return lines.join('\n');
 }
 
 function buildPlayerGroup(muzzleOffset: number, playerRadius: number, playerHeight: number, bulletHeight: number): THREE.Group {

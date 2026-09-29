@@ -82,6 +82,7 @@ export class Room {
   private tickCount = 0;
   private snapshotSeq = 0;
   private nextPlayerSeq = 0;
+  private generation = 0; // bumped by dispose(), so a start still awaiting knows to abandon itself
 
   constructor(opts: RoomOptions) {
     this.code = opts.code;
@@ -188,6 +189,8 @@ export class Room {
 
   /** Ends any running match and releases everything. Call when the room is discarded. */
   dispose(): void {
+    this.generation += 1;
+    this.starting = false;
     this.game?.reset(); // disposes the physics world
     this.game = null;
     this.members = [];
@@ -271,6 +274,7 @@ export class Room {
   private async startMatch(): Promise<void> {
     const entry = this.maps.find((m) => m.id === this.settings.mapId)!;
     this.starting = true;
+    const generation = this.generation;
     const api = new GameApi();
     try {
       api.setRoster(this.members.map((m) => ({ id: m.id, name: m.name, skinId: m.skinId })));
@@ -280,6 +284,7 @@ export class Room {
         this.seed === undefined ? {} : { seed: this.seed },
       );
     } catch (err) {
+      if (generation !== this.generation) return api.reset(); // disposed meanwhile: nobody to tell
       // Never reject out of handle(): a server adapter must not crash on one bad start.
       this.starting = false;
       api.reset();
@@ -288,6 +293,10 @@ export class Room {
       if (!owner) this.passOwnershipFrom(0);
       if (owner) this.error(owner, `could not start the match: ${err instanceof Error ? err.message : String(err)}`);
       this.broadcastLobby();
+      return;
+    }
+    if (generation !== this.generation) {
+      api.reset(); // the room was disposed while the match was starting
       return;
     }
     this.starting = false;

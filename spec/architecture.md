@@ -20,18 +20,18 @@ Three deployable pieces share one environment-free core:
 ```mermaid
 flowchart LR
   subgraph Browser["Browser client"]
-    UI["UI screens<br/>src/ui (M1)"]
+    UI["UI screens<br/>src/ui (built)"]
     Input["Keyboard input<br/>src/input.ts (built)"]
     Camera["Camera<br/>src/camera.ts (built)"]
     Renderer["Renderer<br/>src/render.ts (built)"]
     NetClient["Network client<br/>src/net/client.ts (M2)"]
     Editor["Level editor<br/>src/editor (M3)"]
-    PracticeRoom["Practice: Room in-process (M1)"]
+    PracticeRoom["Practice: LocalSession<br/>src/client (built)"]
   end
 
   subgraph Core["Shared core (no DOM, no Node APIs)"]
-    Room["Room<br/>src/session/room.ts (M1)"]
-    Protocol["Protocol types<br/>src/session/protocol.ts (M1)"]
+    Room["Room<br/>src/session/room.ts (built)"]
+    Protocol["Protocol + parser<br/>src/session/protocol.ts (built)"]
     GameApi["GameApi<br/>src/api.ts (built)"]
     Sim["Simulation<br/>src/sim (built)"]
     Physics["PhysicsWorld (Rapier)<br/>src/physics (built)"]
@@ -78,13 +78,14 @@ flowchart LR
 | **PhysicsWorld** | A Rapier world used purely for collision queries: obstacle colliders built once per game, one kinematic body per player. Answers `moveDistance` (shape-cast sweep), `gunFits` (overlap), `raycastBullet`, `isFreeOfObstacles`. The one live, non-serializable part of `State`. | `src/physics/world.ts`, `obstacles.ts`, `rapier.ts` | built |
 | **Simulation (`sim`)** | Game rules. `createGame(RAPIER, config, map, roster, seed)` and `step(state, inputs, dt) → {state, events}`: movement, turning, shooting, deaths, rounds, match, spawns. Deterministic given the seed (§4). | `src/sim/{state,step,spawn,rng,types,snapshot}.ts` | built |
 | **Map loader** | The one entry point for every map (built-in, preset, import, received by the server): version check, defaults, hard constraints. | `src/sim/mapFormat.ts` | M0 |
-| **GameApi** | A control surface over one game: roster, `start({seed})`, `setMoveDir` / `pressShoot`, `tick` / `runTicks`, `getState` / `getEvents`, `pause` / `resume`. The keyboard and AI harnesses call the same methods. Exposed as `window.GameAPI`. | `src/api.ts` | built |
-| **Room** | The session: lobby (roster, owner, unique skins, ready, map, config, start gate), match lifecycle, input latching, disconnect/reconnect, ownership transfer. Emits protocol messages. Time is injected; it never owns a timer. | `src/session/room.ts`, `protocol.ts` | M1 |
+| **GameApi** | A control surface over one game: roster, `start({seed})`, `setMoveDir` / `pressShoot`, `tick` / `runTicks`, `getState` / `getEvents`, `pause` / `resume`. A Room and AI harnesses call the same methods. Exposed as `window.GameAPI` during practice. | `src/api.ts` | built |
+| **Room** | The session: lobby (roster, owner, unique skins, ready, map, config, start gate), match lifecycle, input latching, disconnect/reconnect, ownership transfer. Emits protocol messages. Time is injected; it never owns a timer. | `src/session/room.ts`, `protocol.ts`, `maps.ts` | built |
 | **Game server** | Node shell: WebSocket connections, room codes, a drift-corrected 60 Hz loop per room, snapshots at 30 Hz, reconnect tokens, empty-room cleanup. The only place Node APIs are allowed. | `server/*` | M2 |
-| **Network client** | Browser side of the protocol: sends input when it changes, drops stale snapshots, interpolates between the last two snapshots. | `src/net/client.ts` | M2 |
-| **Renderer** | three.js scene as a pure function of a snapshot. Fixed tilted camera, framing computed from board size; obstacle meshes from Geometry; HUD. | `src/render.ts` | built (HUD M1) |
+| **Network client** | A `Session` over WebSocket: connects, sends `createRoom`/`joinRoom`/`rejoin` and client messages, delivers server messages, reports the close. Stale-snapshot discard lives in the client model; interpolation between the last two snapshots is applied before rendering. | `src/net/client.ts` | M2 |
+| **Renderer** | three.js scene as a pure function of a `RenderState`. Fixed tilted camera, framing computed from board size; obstacle meshes from Geometry. (The HUD is a DOM overlay, see UI screens.) | `src/render.ts` | built |
 | **Camera + Input** | Camera azimuth is the source of truth. Arrow and IJKL key mappings are derived from it (§8), then turned into `{moveDir, shoot}`. | `src/camera.ts`, `src/input.ts` | built |
-| **UI screens** | Home → Practice / Create / Join / Editor → Lobby → Match → Match end. | `src/ui/*` | M1 |
+| **Client model** | Pure fold of server messages into the ClientView (screens, lobby, match, snapshots, result), the HUD model, the `InputSender`, the `Session` interface and `LocalSession` (practice), and the chase-and-shoot bot strategy. DOM-free, so it is unit-tested. | `src/client/*` | built |
+| **UI screens** | Home → Practice / Create / Join / Editor → Lobby → Match → Match end, drawn from the ClientView. Names only ever inserted as text. | `src/ui/*` | built |
 | **Level editor** | `EditorApi` (headless) plus a 2D surface and a live 3D preview; validation, presets, JSON import/export. | `src/editor/*` | M3 |
 | **Bot client** | Drives a player over a real WebSocket using the same protocol, so AI tests can fill rooms without a browser. | `scripts/bot.ts` | M2 |
 
@@ -198,10 +199,10 @@ A `Room` runs inside the page, driven by the page's own `requestAnimationFrame` 
 | Path | Scope | Speed | Status |
 |---|---|---|---|
 | `GameApi.runTicks(n)` | One game, rules only | Far faster than real time; deterministic with a seed | built |
-| `Room` + in-memory adapter | Lobby, match, multiple clients, disconnects | Fast, no sockets | M1/M2 |
+| `Room` with sink callbacks | Lobby, match, multiple clients, disconnects | Fast, no sockets | built |
 | `scripts/bot.ts` over WebSocket | The real server end to end | Real time | M2 |
 
-`GameApi.pause()` stops the live page's own loop so an AI can call `runTicks` against `window.GameAPI` without both loops advancing the same state (§4).
+In the page, `window.GameClient` is the UI-level harness: ClientMessages in, the ClientView out, and in practice `pause()`/`runTicks(n)` so the page loop and the harness don't both advance the same state (§4).
 
 ## 5. State and data ownership
 

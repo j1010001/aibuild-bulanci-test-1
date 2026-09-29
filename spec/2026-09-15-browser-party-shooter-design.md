@@ -108,7 +108,7 @@ Each unit has one job and a well-defined interface.
 | **Session (`session`)** | The `Room`: lobby state (roster, owner, skins, ready flags, map, config, start gate), the match lifecycle, per-player input with shoot edges latched until the next tick, disconnect/reconnect and ownership transfer. Drives `sim` through `GameApi`. Its output is a stream of protocol messages (§12). Environment-free: time is injected (it never owns a timer), so the same class runs on the server, in tests, and in the browser for practice. | sim |
 | **Server (`server/`)** | A thin Node shell around `session`: HTTP + WebSocket, the room-code registry, the fixed-rate 60 Hz tick timer, the process entry point. The only unit allowed to use Node APIs. Never imports client/UI code. | session |
 | **Network client** | Browser WebSocket client: sends input, receives snapshots/events, drops stale snapshots, interpolates between snapshots for the renderer. Never touches game rules. | session protocol types |
-| **Renderer** | three.js scene. Pure function of a state snapshot: plane, obstacles, players, bullets. Obstacle meshes are built from the same `buildObstacleGeometry` output `physics` turns into colliders (§7, §11) — not a separately-tuned visual model. | sim (read-only) |
+| **Renderer** | three.js scene. Pure function of a `RenderState` (the static `matchStart` data plus one dynamic snapshot, built by the client view model): plane, obstacles, players, bullets. Obstacle meshes are built from the same `buildObstacleGeometry` output `physics` turns into colliders (§7, §11) — not a separately-tuned visual model. Frees GPU buffers of meshes it removes; all bullets share one geometry and material. | geometry, client view-model types (read-only) |
 | **Input** | Keyboard → normalized `{ moveDir, shoot }`. Holds no state. | — |
 | **Editor** | Author maps; persist locally; JSON import/export. Shares primitive definitions with `sim`. | sim definitions |
 | **Control surface (`GameApi`)** | The one entry point that drives `sim`: roster, `start`/`reset`, input (`setMoveDir`/`pressShoot`), advancing time (`tick`/`runTicks`), and introspection (`getState`/`getEvents`). An AI/test harness calls the *same* methods a Room does — there is no UI-only path. In the page it is exposed as `window.GameAPI` during practice only (the practice room's game; `null` otherwise, since a multiplayer game runs on the server). `start()` is async — the physics engine's WASM module needs one await the first time it's used per page/process; every other call, including `tick()`/`runTicks()`, is synchronous after that. | sim |
@@ -428,7 +428,10 @@ replaced.
 
 - Input keys: **arrows** or **IJKL** = move, **Space** = shoot. Keys typed into a text
   field (a player name, a room code) are text, never movement, and leaving the window
-  releases every held direction.
+  releases every held direction. Modifier chords (Cmd/Ctrl/Alt + key) are never movement,
+  since the browser may not deliver their keyup. Outside a match the keys are tracked but
+  never swallowed, so Space still presses a focused button and arrows still scroll; a
+  direction already held when a match starts takes effect immediately.
 - Keyboard input goes to an `InputSender`, which sends an `input` message (§12) only when
   the direction changes or on a shot, with a strictly increasing `seq`. It is active only
   on the match screen.

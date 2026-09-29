@@ -1,70 +1,92 @@
-// Wires GameApi (sim) -> Renderer (three.js) -> keyboard input. The important property:
-// this file is a thin adapter. Everything it does through `api` is exactly what an AI
-// test script can do too — see window.GameAPI exposed below.
+// Page bootstrap: the App (screens + session), the renderer, the keyboard, and the
+// fixed-timestep loop that ticks practice mode (a multiplayer match is ticked by the
+// server). Everything a human does here goes through the same ClientMessages an AI
+// harness can send via window.GameClient.
 
-import { api } from './api';
-import { bindKeyboard } from './input';
+import { renderStateOf } from './client/model';
+import type { ClientView } from './client/model';
+import type { GameApi } from './api';
+import { ensureRapierReady } from './physics/rapier';
 import { Renderer } from './render';
+import type { ClientMessage } from './session/protocol';
+import { App } from './ui/app';
 
 const FIXED_DT = 1 / 60;
 const MAX_CATCHUP_STEPS = 8; // guards against a huge dt after a tab was backgrounded
 
 const canvas = document.getElementById('app') as HTMLCanvasElement;
-const hud = document.getElementById('hud');
+const root = document.getElementById('ui') as HTMLElement;
 
-// start() is async only because the physics engine's WASM module needs one await the
-// first time it's used (src/physics/rapier.ts) — everything after this is synchronous.
 async function main(): Promise<void> {
-  api.setRoster([{ name: 'You' }, { name: 'Player 2' }]);
-  await api.start();
+  await ensureRapierReady(); // practice runs the physics in the page
+  const app = new App(root, canvas, null);
+  const renderer = new Renderer(canvas);
 
-  const localPlayerId = api.getRoster()[0]!.id;
-  bindKeyboard(api, localPlayerId);
-
-  const renderer = new Renderer(canvas, hud);
-
+  let paused = false;
   let lastTime = performance.now();
   let accumulator = 0;
 
   function frame(now: number): void {
-    if (api.isPaused()) {
-      // Don't advance automatically — an AI/test harness is driving tick()/runTicks()
-      // explicitly and doesn't want this loop racing it (api.pause()). Keep rendering
-      // so its explicit ticks are still visible, and keep resetting the clock so a
-      // resume() doesn't see a huge elapsed gap and burst-catch-up.
-      lastTime = now;
-      accumulator = 0;
-      renderer.render(api.getState());
-      requestAnimationFrame(frame);
-      return;
-    }
-
     const elapsed = Math.min((now - lastTime) / 1000, MAX_CATCHUP_STEPS * FIXED_DT);
     lastTime = now;
-    accumulator += elapsed;
-
-    let steps = 0;
-    while (accumulator >= FIXED_DT && steps < MAX_CATCHUP_STEPS) {
-      api.tick(FIXED_DT);
-      accumulator -= FIXED_DT;
-      steps += 1;
+    // Paused through either harness surface: GameClient.pause() or the practice GameApi's pause().
+    const hold = paused || app.local?.room.gameApi?.isPaused() === true;
+    if (app.local && !hold) {
+      accumulator += elapsed;
+      let steps = 0;
+      while (accumulator >= FIXED_DT && steps < MAX_CATCHUP_STEPS) {
+        app.local.tick(FIXED_DT);
+        accumulator -= FIXED_DT;
+        steps += 1;
+      }
+    } else {
+      accumulator = 0; // no burst catch-up after a pause
     }
 
-    renderer.render(api.getState());
+    const rs = renderStateOf(app.view);
+    if (rs && (app.view.screen === 'match' || app.view.screen === 'matchEnd')) renderer.render(rs);
+    app.frame(now);
     requestAnimationFrame(frame);
   }
-
   requestAnimationFrame(frame);
+
+  window.GameClient = {
+    view: () => app.view,
+    send: (msg) => app.send(msg),
+    startPractice: (name) => app.startPractice(name),
+    leave: () => app.leave(),
+    pause: () => {
+      paused = true;
+    },
+    resume: () => {
+      paused = false;
+    },
+    isPaused: () => paused,
+    runTicks: (n, dt = FIXED_DT) => {
+      for (let i = 0; i < n; i++) app.local?.tick(dt);
+    },
+  };
+  Object.defineProperty(window, 'GameAPI', { get: () => app.local?.room.gameApi ?? null, configurable: true });
 }
 
 void main();
 
-// Exposed so a human can play with the keyboard while an AI/test harness drives other
-// players (or the same one) from the devtools console or an automated script, at any
-// speed — runTicks() advances the sim without waiting on rAF or touching the DOM.
+// window.GameClient drives the game exactly as the UI does (ClientMessages in, ClientView
+// out). window.GameAPI is the practice room's GameApi, for direct sim introspection; it
+// is null outside practice, since in multiplayer the simulation runs on the server.
 declare global {
   interface Window {
-    GameAPI: typeof api;
+    GameClient: {
+      view(): ClientView;
+      send(msg: ClientMessage): void;
+      startPractice(name?: string): void;
+      leave(): void;
+      /** Practice only: stop the page loop from ticking, so runTicks() is the only clock. */
+      pause(): void;
+      resume(): void;
+      isPaused(): boolean;
+      runTicks(n: number, dt?: number): void;
+    };
+    readonly GameAPI: GameApi | null;
   }
 }
-window.GameAPI = api;

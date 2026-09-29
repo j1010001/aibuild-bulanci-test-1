@@ -5,18 +5,76 @@
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
   <title>Browser Party Shooter</title>
   <style>
-    html, body { margin: 0; padding: 0; width: 100%; height: 100%; background: #10141a; overflow: hidden; }
-    #app { width: 100vw; height: 100vh; display: block; }
-    #hud {
-      position: fixed; top: 8px; left: 8px; color: #e8eef5; font: 13px/1.4 monospace;
-      background: rgba(0,0,0,0.35); padding: 8px 10px; border-radius: 6px; pointer-events: none;
-      white-space: pre;
+    :root {
+      --bg: #10141a;
+      --panel: #1a212b;
+      --line: #2c3644;
+      --text: #e8eef5;
+      --muted: #8d9aab;
+      --accent: #e0503f;
+      --ok: #5bbf72;
     }
+    html, body { margin: 0; padding: 0; width: 100%; height: 100%; background: var(--bg); color: var(--text); overflow: hidden;
+      font: 15px/1.4 system-ui, -apple-system, "Segoe UI", sans-serif; }
+    #app { position: fixed; inset: 0; width: 100vw; height: 100vh; display: block; }
+    #ui { position: fixed; inset: 0; pointer-events: none; display: flex; align-items: center; justify-content: center; }
+    #ui > * { pointer-events: auto; }
+    #ui[data-screen="match"] { align-items: stretch; justify-content: stretch; }
+    #ui[data-screen="match"] > .match { pointer-events: none; }
+
+    .panel { background: var(--panel); border: 1px solid var(--line); border-radius: 12px; padding: 24px 28px; width: min(380px, calc(100vw - 32px));
+      display: flex; flex-direction: column; gap: 12px; box-shadow: 0 12px 40px rgba(0,0,0,.45); max-height: calc(100vh - 32px); overflow: auto; }
+    h1 { font-size: 22px; margin: 0 0 4px; }
+    h2 { font-size: 20px; margin: 0; }
+    h3 { font-size: 13px; margin: 6px 0 0; color: var(--muted); text-transform: uppercase; letter-spacing: .06em; }
+    label { display: flex; justify-content: space-between; align-items: center; gap: 12px; color: var(--muted); }
+    input, select { background: #0f141b; color: var(--text); border: 1px solid var(--line); border-radius: 8px; padding: 8px 10px; font: inherit; }
+    input.name { flex: 1; }
+    input.code { flex: 1; text-transform: uppercase; letter-spacing: .15em; }
+    input[type="number"] { width: 72px; }
+    button { background: #243040; color: var(--text); border: 1px solid var(--line); border-radius: 8px; padding: 9px 14px; font: inherit; cursor: pointer; }
+    button:hover:not(:disabled) { background: #2d3b4f; }
+    button:disabled { opacity: .45; cursor: not-allowed; }
+    button.primary { background: var(--accent); border-color: var(--accent); font-weight: 600; }
+    button.primary:hover:not(:disabled) { background: #ec6453; }
+    .row { display: flex; gap: 8px; }
+    .row > * { flex: 1; }
+    .hint { color: var(--muted); font-size: 13px; margin: 4px 0 0; text-align: center; }
+    .warn { color: #ffb4a8; margin: 0; }
+
+    .code-big { font-size: 18px; color: var(--muted); }
+    .code-big strong { color: var(--text); font-size: 26px; letter-spacing: .18em; margin-left: 6px; }
+    ul.players, ul.scores { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 6px; }
+    ul.players li { display: flex; align-items: center; gap: 8px; padding: 6px 8px; background: #141a22; border-radius: 8px; }
+    .swatch { width: 14px; height: 14px; border-radius: 50%; flex: none; border: 1px solid rgba(255,255,255,.3); }
+    .pname { flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+    .tag { font-size: 11px; padding: 1px 6px; border-radius: 6px; background: #2a3546; color: var(--muted); }
+    .tag.you { background: #3a2a2a; color: #ffb4a8; }
+    .status { font-size: 12px; color: var(--muted); }
+    .status.ready { color: var(--ok); }
+    .skins { display: flex; gap: 8px; flex-wrap: wrap; }
+    button.skin { width: 30px; height: 30px; padding: 0; border-radius: 50%; border: 2px solid transparent; }
+    button.skin.mine { border-color: #fff; }
+
+    .match { position: relative; width: 100%; height: 100%; }
+    .hud { position: absolute; top: 12px; left: 12px; background: rgba(10,14,20,.6); border-radius: 10px; padding: 10px 12px; min-width: 180px; }
+    .hud .clock { font-weight: 600; margin-bottom: 6px; }
+    .hud ul.scores li { display: flex; align-items: center; gap: 8px; }
+    .hud li.dead { opacity: .5; }
+    .hud li.gone .pname { text-decoration: line-through; }
+    .hud .score { font-weight: 700; }
+    .hud .banner { position: fixed; top: 22%; left: 50%; transform: translateX(-50%); font-size: 30px; font-weight: 700;
+      background: rgba(10,14,20,.7); padding: 10px 22px; border-radius: 12px; }
+    .match button.leave { position: absolute; top: 12px; right: 12px; pointer-events: auto; }
+    .matchend .score { font-weight: 700; }
+    .toast { position: fixed; bottom: 18px; left: 50%; transform: translateX(-50%); background: #3a2323; color: #ffd2cb;
+      border: 1px solid #6b3434; border-radius: 8px; padding: 8px 14px; }
+    .toast:empty { display: none; }
   </style>
 </head>
 <body>
   <canvas id="app"></canvas>
-  <div id="hud"></div>
+  <div id="ui"></div>
   <script type="module" src="/src/main.ts"></script>
 </body>
 </html>
