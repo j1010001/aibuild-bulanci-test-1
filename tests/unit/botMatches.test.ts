@@ -16,7 +16,6 @@ beforeAll(async () => {
   await ensureRapierReady();
 });
 
-/** Plays one bot-only match to the end; returns the winner's name (null = no winner). */
 /** Plays one bot-only match to the end; returns the winner's name (null = no winner) and how
  * many rounds ran out the clock (bots that never met). A round can also end with nobody
  * winning when the last two kill each other at once — a legal draw (spec §10), not counted. */

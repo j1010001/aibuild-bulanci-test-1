@@ -348,3 +348,34 @@ describe('BotBrain: one navigation grid per map (review finding 10)', () => {
     expect(build).toHaveBeenCalledTimes(1);
   });
 });
+
+describe('BotBrain: dodging from off the line (review of M2.5 tasks 4-5, finding 1)', () => {
+  /** Kinematic run: the bot moves 0.1 per frame; the bullet flies along y = 20 toward it. Hit = passes within a radius. */
+  function survives(seed: number, startY: number, targetY: number): boolean {
+    const brain = brainFor({ ...DIFFICULTY.hard, dodgeChance: 1 }, OPEN, seed);
+    let pos = { x: 30, y: startY };
+    let facing: Direction = '-X';
+    let bx = 23;
+    const step = DEFAULT_CONFIG.bulletSpeed / 60;
+    for (let k = 0; k < 120; k++) {
+      const bullets: Bullet[] = bx < pos.x + R ? [{ id: 'x1', ownerId: 'b', pos: { x: bx, y: 20 }, dir: '+X' }] : [];
+      const input = brain.decide(state([player('a', pos, facing), player('b', { x: 5, y: targetY }, '+Y')], bullets), 'a', k * FRAME);
+      if (input.moveDir) {
+        facing = input.moveDir;
+        const v = DIR_VECTOR[input.moveDir];
+        pos = { x: pos.x + v.x * 0.1, y: pos.y + v.y * 0.1 };
+      }
+      const next = bx + step;
+      if (bullets.length > 0 && bx <= pos.x && next >= pos.x - R && Math.abs(pos.y - 20) < R) return false;
+      bx = next;
+    }
+    return true;
+  }
+
+  it('steps out on the side it is already on, and chasing does not walk it back into the path', () => {
+    for (let seed = 1; seed <= 10; seed++) {
+      expect(survives(seed, 20.3, 5)).toBe(true); // target on the far side (below the line)
+      expect(survives(seed, 19.7, 35)).toBe(true); // mirrored
+    }
+  });
+});
