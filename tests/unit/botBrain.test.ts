@@ -328,7 +328,7 @@ describe('BotBrain: more behaviors (review finding 12)', () => {
 
   it('trying to move but getting nowhere: escapes in another direction', () => {
     const brain = brainFor(DIFFICULTY.normal);
-    const s = state([player('a', { x: 20.25, y: 10.25 }, '+Y'), player('b', { x: 20.25, y: 35 }, '-X')]); // the world never lets it move
+    const s = state([player('a', { x: 20.25, y: 10.25 }, '+Y'), player('b', { x: 25, y: 35 }, '-X')]); // not lined up; the world never lets it move
     const moves: (Direction | null)[] = [];
     let escaped = false;
     for (let t = 0; t <= 2500; t += FRAME) {

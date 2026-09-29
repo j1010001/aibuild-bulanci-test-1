@@ -10,16 +10,21 @@ import { InProcessSession } from '../../src/client/inProcessSession';
 import { ensureRapierReady } from '../../src/physics/rapier';
 import { BUILT_IN_MAPS } from '../../src/session/maps';
 import { Room } from '../../src/session/room';
+import { DEFAULT_CONFIG } from '../../src/sim';
 
 beforeAll(async () => {
   await ensureRapierReady();
 });
 
 /** Plays one bot-only match to the end; returns the winner's name (null = no winner). */
-/** Plays one bot-only match to the end; returns the winner's name (null = no winner) and how many rounds ended with nobody winning. */
-async function played(opts: { seed: number; mapId: string; targetScore: number; bots: { name: string; difficulty: Difficulty }[] }, maxSeconds = 600): Promise<{ winner: string | null; draws: number }> {
+/** Plays one bot-only match to the end; returns the winner's name (null = no winner) and how
+ * many rounds ran out the clock (bots that never met). A round can also end with nobody
+ * winning when the last two kill each other at once — a legal draw (spec §10), not counted. */
+async function played(opts: { seed: number; mapId: string; targetScore: number; bots: { name: string; difficulty: Difficulty }[] }, maxSeconds = 600): Promise<{ winner: string | null; timeouts: number }> {
   const room = new Room({ code: 'ABCDE', seed: opts.seed });
-  let draws = 0;
+  let timeouts = 0;
+  let t = 0;
+  let roundStartedTick = 0;
   const bots = opts.bots.map((b, i) => {
     const session = new InProcessSession(room, i === 0 ? { kind: 'create' } : { kind: 'join', code: 'ABCDE' }, b.name);
     const bot = new BotPlayer(session, {
@@ -27,18 +32,25 @@ async function played(opts: { seed: number; mapId: string; targetScore: number; 
       seed: opts.seed * 100 + i,
       host: i === 0 ? { mapId: opts.mapId, targetScore: opts.targetScore } : undefined,
     });
-    if (i === 0) session.onMessage((m) => {
-      if (m.type === 'event' && m.event.kind === 'roundEnd' && m.event.winnerId === null) draws++;
-    });
+    if (i === 0) {
+      session.onMessage((m) => {
+        if (m.type === 'matchStart') roundStartedTick = t;
+        if (m.type === 'event' && m.event.kind === 'roundEnd') {
+          const ranOutTheClock = t - roundStartedTick >= DEFAULT_CONFIG.roundTime * 60 - 2;
+          if (m.event.winnerId === null && ranOutTheClock) timeouts++;
+          roundStartedTick = t; // the next round starts at once
+        }
+      });
+    }
     bot.connect();
     return bot;
   });
   let now = 0;
-  for (let t = 0; t < maxSeconds * 60; t++) {
+  for (t = 0; t < maxSeconds * 60; t++) {
     const host = bots[0]!;
     if (host.results.length > 0) {
       const winner = host.results[0]!.winnerId;
-      return { winner: winner === null ? null : (host.view.match?.players.find((p) => p.id === winner)?.name ?? winner), draws };
+      return { winner: winner === null ? null : (host.view.match?.players.find((p) => p.id === winner)?.name ?? winner), timeouts };
     }
     for (const b of bots) b.step(now);
     if (bots.some((b) => b.view.screen === 'lobby')) await new Promise((r) => setTimeout(r, 0));
@@ -57,9 +69,9 @@ describe('bot-only matches finish on every map, at every difficulty', () => {
   it.each(cases)('%s, %s: three bots play a match to a winner', async (mapId, difficulty) => {
     // Two seeds each; no round may run out the clock (bots that can't reach each other).
     for (const seed of [7, 8]) {
-      const { winner, draws } = await played({ seed, mapId, targetScore: 2, bots: ['A', 'B', 'C'].map((name) => ({ name, difficulty })) });
+      const { winner, timeouts } = await played({ seed, mapId, targetScore: 2, bots: ['A', 'B', 'C'].map((name) => ({ name, difficulty })) });
       expect(winner).not.toBeNull();
-      expect(draws).toBe(0);
+      expect(timeouts).toBe(0);
     }
   }, 60_000);
 });
@@ -83,17 +95,19 @@ describe('difficulty levels mean something', () => {
     return won;
   }
 
-  // Thresholds sit about two standard deviations below rates measured over 60+ seeds, so
-  // they catch a level that stopped meaning something without flipping on a reseed.
+  // Measured over 60 seeds (2026-09-29): hard beats easy 60/60, normal beats easy 60/60,
+  // hard beats normal 60/60. Each threshold assumes a true rate of at least 95% and sits
+  // about two standard deviations below it on 30 matches, so it catches a level that stopped
+  // meaning something without flipping when the bots' randomness is consumed differently.
   it('over 30 seeded matches, a hard bot beats an easy bot in nearly all of them', async () => {
-    expect(await wins('hard', 'easy', 30)).toBeGreaterThanOrEqual(25);
+    expect(await wins('hard', 'easy', 30)).toBeGreaterThanOrEqual(27);
   }, 240_000);
 
-  it('a normal bot beats an easy bot in most', async () => {
-    expect(await wins('normal', 'easy', 30)).toBeGreaterThanOrEqual(22);
+  it('a normal bot beats an easy bot in nearly all of them', async () => {
+    expect(await wins('normal', 'easy', 30)).toBeGreaterThanOrEqual(26);
   }, 240_000);
 
-  it('a hard bot beats a normal bot more often than not', async () => {
-    expect(await wins('hard', 'normal', 30)).toBeGreaterThanOrEqual(18);
+  it('a hard bot beats a normal bot in nearly all of them', async () => {
+    expect(await wins('hard', 'normal', 30)).toBeGreaterThanOrEqual(26);
   }, 240_000);
 });
