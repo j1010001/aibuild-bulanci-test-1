@@ -63,9 +63,32 @@ function findFairSpawn(state: State, playerId: PlayerId, chosen: readonly Vec2[]
   return null;
 }
 
-/** Last-resort placement when no fair spot exists (spec §14): edge-margin corners, ignoring separation. */
-function fallbackSpawn(state: State, playerId: PlayerId, index: number): { pos: Vec2; facing: Direction } {
-  const { board, spawnEdgeMargin } = state.config;
+/**
+ * Best-effort placement when no fair spot exists (spec §14): scan the board for spots that
+ * are clear of obstacles, far enough from every placed player that nobody starts inside
+ * another's body or gun, and admit a facing where the gun fits — preferring the spot
+ * farthest from everyone already placed. Only if the board has no such spot at all does
+ * it fall back to a corner.
+ */
+function fallbackSpawn(state: State, playerId: PlayerId, chosen: readonly Vec2[], index: number): { pos: Vec2; facing: Direction } {
+  const { board, spawnEdgeMargin, playerRadius, muzzleOffset } = state.config;
+  const margin = Math.min(spawnEdgeMargin, playerRadius + 0.1);
+  const minSeparation = playerRadius + muzzleOffset + 0.1; // clear of each other's gun reach
+  let best: { pos: Vec2; facing: Direction; clearance: number } | null = null;
+  const step = 0.5;
+  for (let x = margin; x <= board.width - margin + 1e-9; x += step) {
+    for (let y = margin; y <= board.height - margin + 1e-9; y += step) {
+      const pos = { x, y };
+      const clearance = chosen.reduce((m, c) => Math.min(m, Math.hypot(c.x - x, c.y - y)), Infinity);
+      if (clearance < minSeparation || (best && clearance <= best.clearance)) continue;
+      if (!state.physics.isFreeOfObstacles(pos)) continue;
+      state.physics.setPlayerPosition(playerId, pos);
+      const facing = pickValidFacing(state, playerId, pos);
+      if (facing === null) continue;
+      best = { pos, facing, clearance };
+    }
+  }
+  if (best) return { pos: best.pos, facing: best.facing };
   const corners: Vec2[] = [
     { x: spawnEdgeMargin, y: spawnEdgeMargin },
     { x: board.width - spawnEdgeMargin, y: spawnEdgeMargin },
@@ -74,8 +97,7 @@ function fallbackSpawn(state: State, playerId: PlayerId, index: number): { pos: 
   ];
   const pos = corners[index % corners.length]!;
   state.physics.setPlayerPosition(playerId, pos);
-  const facing = pickValidFacing(state, playerId, pos) ?? '+X';
-  return { pos, facing };
+  return { pos, facing: pickValidFacing(state, playerId, pos) ?? '+X' };
 }
 
 /** Assigns pos/facing to every connected player, mutating `state.players` in place. */
@@ -96,7 +118,7 @@ export function assignSpawns(state: State, events: GameEvent[]): void {
       player.facing = spot.facing;
     } else {
       events.push({ kind: 'spawnFairnessFailed', playerId: player.id as PlayerId });
-      const fb = fallbackSpawn(state, player.id, fallbackIndex++);
+      const fb = fallbackSpawn(state, player.id, chosen, fallbackIndex++);
       player.pos = fb.pos;
       player.facing = fb.facing;
     }

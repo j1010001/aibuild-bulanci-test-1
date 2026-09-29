@@ -46,7 +46,7 @@ export function createGame(
   const config: Config = {
     ...DEFAULT_CONFIG,
     ...configOverrides,
-    board: { ...DEFAULT_CONFIG.board, ...(configOverrides.board ?? map.board) },
+    board: { ...map.board }, // always the map's: its obstacles were validated against it
   };
 
   const physics = new PhysicsWorld(RAPIER, map, {

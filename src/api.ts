@@ -13,6 +13,9 @@ import { SKIN_PALETTE } from './sim/skins';
 /** `id` is optional: a Room assigns its own stable ids; otherwise GameApi numbers them. */
 export type RosterSeed = { id?: PlayerId; name: string; skinId?: string };
 
+/** Players per game: also the room cap (spec §5), one per palette skin. */
+const MAX_PLAYERS = SKIN_PALETTE.length;
+
 export type StartOptions = {
   /** Seeds all sim randomness (spawns). Same seed + same inputs => identical run. */
   seed?: number;
@@ -63,6 +66,9 @@ export class GameApi {
     if (this.roster.length === 0) {
       throw new Error('GameApi.start: add at least one player to the roster first');
     }
+    if (this.roster.length > MAX_PLAYERS) throw new Error(`GameApi.start: at most ${MAX_PLAYERS} players (got ${this.roster.length})`);
+    // The board always comes from the map, which the loader has checked every obstacle against.
+    if (configOverrides.board) throw new Error('GameApi.start: the board comes from the map; do not override config.board');
     // Every map enters a game here, so this is where it is validated (spec §13).
     const parsed = parseMap(map);
     if (!parsed.ok) throw new Error(`GameApi.start: invalid map: ${parsed.errors.join('; ')}`);

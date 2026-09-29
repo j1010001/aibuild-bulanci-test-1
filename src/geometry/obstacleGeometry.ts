@@ -36,7 +36,8 @@ export type PartSpec = BoxSpec | ConeSpec | CylinderSpec | TrimeshSpec;
 /** An obstacle's full geometry: one or more parts (e.g. an arch's two pillars + lintel). */
 export type ObstacleGeometry = { parts: PartSpec[] };
 
-const ARCH_HEIGHT = 3;
+/** Every arch stands this tall; a door at least this high leaves no lintel (spec §7, §13). */
+export const ARCH_HEIGHT = 3;
 
 export function buildObstacleGeometry(def: ObstacleDef): ObstacleGeometry {
   switch (def.type) {

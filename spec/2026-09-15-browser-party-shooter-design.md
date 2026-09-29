@@ -822,18 +822,23 @@ Default board is 40×40 units.
 entry point for every map — built-in, a saved preset, an imported file, one received by
 the server. `GameApi.start` runs every map through it, so no invalid map can reach a
 game. It treats input as untrusted:
-- `version` must be 1; unknown fields are dropped.
-- The board is 10–200 units on each side.
-- At most 200 obstacles, each with a unique `id` of 1–64 characters and a known `type`;
-  every size positive and finite, heights at most 20.
+- `version` must be 1; unknown fields are dropped; only an object's own fields count.
+- The board is 10–200 units on each side, and a game's board is always the map's (a
+  config override is refused), since every obstacle was checked against it.
+- At most 200 obstacles, each with a unique `id` of 1–64 characters (no control or
+  formatting characters) and a known `type`.
+- Every size at least 0.1 (smaller is too thin to see) and finite; heights at most 20 —
+  including a donut's wheel, whose height is its diameter.
+- An arch always stands 3 units tall (`ARCH_HEIGHT`), so `doorHeight` is at most 3 (a
+  door that high has no lintel); `doorWidth` must leave both pillars at least 0.1 wide.
+- A donut's `holeRadius` must leave a rim at least 0.1 thick (`hubHeight - holeRadius`).
 - Every obstacle lies fully inside the board (cone: its base circle's bounding square).
-- A donut's `holeRadius` is less than the wheel's radius (half its across-axis extent),
-  or there is no rim left; an arch's `doorWidth` is less than its wall's length (its
-  across-axis extent).
 - `axis` (arch and donut) is `"x"` or `"y"`, optional, and defaults to `"y"`, so maps
   authored before the field existed stay valid. `serializeMap` always writes it — the
   editor never relies on the default.
-- A rejected map yields every problem found, each naming its obstacle.
+- A rejected map yields every problem found, each naming its obstacle — including
+  duplicates of an invalid obstacle and obstacles past the count limit.
+- `serializeMap` validates too, and writes every field explicitly.
 
 ## 14. Edge cases and error handling
 
@@ -859,8 +864,12 @@ game. It treats input as untrusted:
   forget the room. Note that in a two-player match a drop ends the match at once (§10);
   with three or more players the match continues and the rejoin restores the player,
   score and all.
-- **No fair-spawn board**: editor blocks/warns at save; runtime falls back to edge-margin
-  placement rather than hanging.
+- **No fair-spawn board**: editor blocks/warns at save. At runtime, a player with no fair
+  spot gets the best spot the board has: clear of obstacles, far enough from everyone
+  already placed that nobody starts inside another's body or gun reach, with a facing
+  where the gun fits, and as far from the others as possible. Only a board with no such
+  spot at all falls back to a corner.
+- **More than 8 players**: `GameApi.start` refuses a roster over 8 (the room cap, §5).
 - **Shoot before any move**: use the spawn default facing.
 - **Concurrent same-tick deaths**: all resolved in one tick, no ordering bias.
 - **<2 connected players**: the owner cannot start the match; solo play is "practice",
