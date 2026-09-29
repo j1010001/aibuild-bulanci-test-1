@@ -52,8 +52,9 @@ describe('startTickLoop', () => {
     startTickLoop(() => ticks++, { now: clock.now, schedule: clock.schedule, maxCatchUp: 5 });
     clock.advance(0);
     const before = ticks;
-    clock.advance(5000, 5000); // the process was frozen for 5 s
-    expect(ticks - before).toBeLessThanOrEqual(5);
+    clock.advance(5100, 5000); // the process was frozen for 5 s, then the timer finally fires
+    expect(ticks - before).toBeGreaterThanOrEqual(1); // the late wake really happened
+    expect(ticks - before).toBeLessThanOrEqual(5); // uncapped, this would be ~300 ticks at once
   });
 
   it('stop() ends the loop', () => {
