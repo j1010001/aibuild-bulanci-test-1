@@ -1,0 +1,19 @@
+{
+  // Isolation check (spec §4): the server and the shared core must compile with no DOM
+  // library at all. An accidental DOM or browser-client import fails here.
+  "compilerOptions": {
+    "target": "ES2022",
+    "module": "ESNext",
+    "moduleResolution": "Bundler",
+    "lib": ["ES2022"],
+    "types": ["node"],
+    "strict": true,
+    "noUncheckedIndexedAccess": true,
+    "skipLibCheck": true,
+    "esModuleInterop": true,
+    "forceConsistentCasingInFileNames": true,
+    "isolatedModules": true,
+    "noEmit": true
+  },
+  "include": ["./**/*.ts", "../src/sim", "../src/physics", "../src/geometry", "../src/session", "../src/api.ts"]
+}

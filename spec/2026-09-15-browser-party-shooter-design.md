@@ -111,7 +111,7 @@ Each unit has one job and a well-defined interface.
 | **Renderer** | three.js scene. Pure function of a state snapshot: plane, obstacles, players, bullets. Obstacle meshes are built from the same `buildObstacleGeometry` output `physics` turns into colliders (§7, §11) — not a separately-tuned visual model. | sim (read-only) |
 | **Input** | Keyboard → normalized `{ moveDir, shoot }`. Holds no state. | — |
 | **Editor** | Author maps; persist locally; JSON import/export. Shares primitive definitions with `sim`. | sim definitions |
-| **Control surface (`GameApi`)** | The one entry point that drives `sim`: roster, `start`/`reset`, input (`setMoveDir`/`pressShoot`), advancing time (`tick`/`runTicks`), and introspection (`getState`/`getEvents`). Keyboard input (§8) and an AI/test harness call the *same* methods — there is no UI-only path. Exposed to the page as `window.GameAPI`. `start()` is async — the physics engine's WASM module needs one await the first time it's used per page/process; every other call, including `tick()`/`runTicks()`, is synchronous after that. | sim |
+| **Control surface (`GameApi`)** | The one entry point that drives `sim`: roster, `start`/`reset`, input (`setMoveDir`/`pressShoot`), advancing time (`tick`/`runTicks`), and introspection (`getState`/`getEvents`). An AI/test harness calls the *same* methods a Room does — there is no UI-only path. In the page it is exposed as `window.GameAPI` during practice only (the practice room's game; `null` otherwise, since a multiplayer game runs on the server). `start()` is async — the physics engine's WASM module needs one await the first time it's used per page/process; every other call, including `tick()`/`runTicks()`, is synchronous after that. | sim |
 
 `sim` exposes `step(state, inputs, dt) → { state, events }` and
 `createGame(RAPIER, config, map, roster, seed) → { state, events }`. Given the same
@@ -131,6 +131,14 @@ round boundary diverged. `State.seed` records the seed a game was created with;
 given, so any run (an AI test, a bug report) can be replayed exactly from its seed. The
 seed must be an integer; it is stored as the 32-bit value actually used (`seed >>> 0`), so
 `State.seed` always replays the run.
+
+**Two harness surfaces in the page.** `window.GameClient` drives the game exactly as the
+UI does: `send(ClientMessage)` in, `view()` (the ClientView the screens render) out, plus
+`startPractice`, `leave`, and for practice `pause`/`resume`/`runTicks(n)`, which tick the
+practice room so its snapshots flow through the same path the UI reads. `window.GameAPI`
+(practice only) gives direct access to the simulation for introspection. The page loop
+stops ticking practice while either `GameClient.pause()` or `GameAPI.pause()` is in
+effect.
 
 `GameApi.tick()`/`runTicks(n)` advance the sim on demand, independent of real time or a
 render frame — the point is that an AI harness can fast-forward a game far faster than
@@ -418,7 +426,12 @@ replaced.
 
 ## 8. Movement and input
 
-- Input keys: **arrows** or **IJKL** = move, **Space** = shoot.
+- Input keys: **arrows** or **IJKL** = move, **Space** = shoot. Keys typed into a text
+  field (a player name, a room code) are text, never movement, and leaving the window
+  releases every held direction.
+- Keyboard input goes to an `InputSender`, which sends an `input` message (§12) only when
+  the direction changes or on a shot, with a strictly increasing `seq`. It is active only
+  on the match screen.
 - Input is normalized: `moveDir ∈ {+X,−X,+Y,−Y, none}`, `shoot` is an edge (key-down),
   not held state.
 - **Arrow-key/IJKL directions are screen-relative, not fixed world-axis labels.** Up
@@ -564,6 +577,15 @@ replaced.
   from center, so bullets visibly leave it; bullets = small sphere explicitly floating
   at bullet height `H` so the tilt makes hole-crossing visually true.
 - Fixed lighting; subtle floor grid/hint for spatial reading. No post-processing in v1.
+- **HUD** (DOM overlay, derived from the ClientView by `src/client/hud.ts`): round number
+  and a countdown from `roundTime`; each player's color, name ("you" marked) and score,
+  highest first, dimmed when dead and struck through when disconnected; a two-second
+  "X wins round N" / "Round N: draw" banner after each round; a Leave button.
+- **Screens** (`src/ui/app.ts`): Home (name, Practice, Create game, Join by code, Level
+  editor) → Lobby (room code, players, colors, ready, owner's settings and Start) → Match
+  → Match end (winner or "no winner", final scores, Back to lobby / Leave). Practice skips
+  the lobby and never reaches Match end (§10). Every screen transition is decided by the
+  pure view model (`src/client/model.ts`); player names are only ever inserted as text.
 - Skins: a fixed, predefined palette of distinct colors (not user-importable, no patterns
   in v1). Uniqueness of `skinId` is enforced in the lobby. Skins are static client-side
   data; rendering only.
@@ -643,6 +665,24 @@ is no peer-to-peer traffic.
   for client correctness, because only the server simulates.
 - Solo **practice** runs a `Room` in-process in the browser, driven by the page's own
   loop, with no server and no network.
+
+### The server process (`server/`)
+
+- One port serves both HTTP (`GET /health` → `200 ok`) and the WebSocket. Port from
+  `SERVER_PORT` (default 8787). `npm run dev` starts it alongside Vite; `npm run server`
+  starts it alone.
+- A single drift-corrected 60 Hz loop ticks every room (`server/loop.ts`): ticks are due
+  at absolute times, so late timer wake-ups catch up rather than slowing the game, and
+  after a long stall it catches up at most 5 ticks and resyncs instead of spiralling.
+- Rooms live in a registry (`server/rooms.ts`) keyed by a 5-character code from an
+  alphabet without look-alikes (no `0/O`, `1/I/L`); a room is disposed and removed as soon
+  as nobody is connected.
+- Each socket gets a `ConnectionHandler` (`server/connection.ts`): before joining it
+  accepts only `createRoom`/`joinRoom`/`rejoin`; afterwards everything goes to its room.
+  Per-connection limits: messages over 4 KB close the socket (1009), more than 30
+  messages per second sustained (burst 60) closes it (1008); invalid JSON or messages
+  are ignored. When a rejoin replaces a connection, the old socket is closed (4000) and
+  its close does *not* disconnect the player.
 
 ### Protocol
 
@@ -800,10 +840,14 @@ the default is a map whose author never chose.
   30 Hz, input latching and stale-seq rejection, event forwarding, seeded determinism,
   disconnect/rejoin by token, owner transfer mid-match, match end back to the lobby with
   the final snapshot first, practice never ending).
-- **Networking** (planned, M2 in `spec/2026-09-29-v1-milestones.md`):
-  - `Room` integration through an in-memory adapter: several clients through join →
-    lobby → shoot → death → round → match; disconnect/reconnect; owner leaves.
-  - Real-socket integration against a server started in the test.
+- **Server** (`serverLoop.test.ts`, `serverRooms.test.ts`, `serverConnection.test.ts`):
+  the tick loop under a fake clock (60 Hz, no drift with late wakes, bounded catch-up);
+  room codes, lookup, ticking and empty-room disposal; the connection handler with fake
+  sockets (routing, rejections, size and rate limits, replaced connections).
+- **Networking**:
+  - Real-socket integration (`tests/integration/server.test.ts`) against a server started
+    in the test: health check, create → join → ready → start with ~30 Hz snapshots, a
+    dropped socket reported to the others.
   - A two-tab browser smoke test against the local server: create code → join → shoot →
     death → round → match.
   - The server compiles under its own no-DOM tsconfig (the §4 isolation rule).

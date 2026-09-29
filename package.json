@@ -4,18 +4,26 @@
   "private": true,
   "type": "module",
   "scripts": {
-    "dev": "vite",
-    "build": "vite build",
+    "dev": "concurrently -k -n web,server -c blue,magenta \"vite\" \"tsx watch server/index.ts\"",
+    "dev:web": "vite",
+    "server": "tsx server/index.ts",
+    "build": "tsc --noEmit -p server/tsconfig.json && vite build",
+    "typecheck": "tsc --noEmit && tsc --noEmit -p server/tsconfig.json",
     "preview": "vite preview",
     "test": "vitest run",
     "test:watch": "vitest"
   },
   "dependencies": {
     "@dimforge/rapier3d-compat": "^0.21.0",
-    "three": "^0.169.0"
+    "three": "^0.169.0",
+    "ws": "^8.22.0"
   },
   "devDependencies": {
+    "@types/node": "^26.6.3",
     "@types/three": "^0.169.0",
+    "@types/ws": "^8.18.2",
+    "concurrently": "^10.0.5",
+    "tsx": "^4.23.15",
     "typescript": "^5.6.3",
     "vite": "^5.4.10",
     "vitest": "^2.1.4"
