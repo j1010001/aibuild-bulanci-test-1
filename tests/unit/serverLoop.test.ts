@@ -57,6 +57,18 @@ describe('startTickLoop', () => {
     expect(ticks - before).toBeLessThanOrEqual(5); // uncapped, this would be ~300 ticks at once
   });
 
+  it('stop() cancels the pending wake-up (no timer left keeping the process alive)', () => {
+    const cancelled: unknown[] = [];
+    let handle = 0;
+    const loop = startTickLoop(() => {}, {
+      now: () => 0,
+      schedule: () => ++handle,
+      cancel: (h) => void cancelled.push(h),
+    });
+    loop.stop();
+    expect(cancelled).toEqual([handle]);
+  });
+
   it('stop() ends the loop', () => {
     const clock = fakeClock();
     let ticks = 0;

@@ -25,8 +25,8 @@ describe('RoomRegistry', () => {
   it('creates rooms with unique codes, even when the code generator collides', () => {
     const codes = ['AAAAA', 'AAAAA', 'BBBBB'];
     const registry = new RoomRegistry({ newCode: () => codes.shift()! });
-    const a = registry.create();
-    const b = registry.create();
+    const a = registry.create()!;
+    const b = registry.create()!;
     expect(a.code).toBe('AAAAA');
     expect(b.code).toBe('BBBBB');
     expect(registry.get('AAAAA')).toBe(a);
@@ -35,7 +35,7 @@ describe('RoomRegistry', () => {
 
   it('ticks every room', async () => {
     const registry = new RoomRegistry();
-    const room = registry.create();
+    const room = registry.create()!;
     const inbox: ServerMessage[] = [];
     const a = room.join('Ann', (m) => inbox.push(m));
     const b = room.join('Bo', () => {});
@@ -49,7 +49,13 @@ describe('RoomRegistry', () => {
 
   it('discards a room once nobody is connected, disposing it', () => {
     const registry = new RoomRegistry();
-    const room = registry.create();
+    const room = registry.create()!;
+    let disposed = 0;
+    const realDispose = room.dispose.bind(room);
+    room.dispose = () => {
+      disposed++;
+      realDispose();
+    };
     const a = room.join('Ann', () => {});
     if (!a.ok) throw new Error('join failed');
     registry.removeIfEmpty(room.code);
@@ -58,11 +64,41 @@ describe('RoomRegistry', () => {
     registry.removeIfEmpty(room.code);
     expect(registry.get(room.code)).toBeUndefined();
     expect(registry.size).toBe(0);
+    expect(disposed).toBe(1);
+  });
+
+  it('refuses to create rooms beyond maxRooms', () => {
+    const registry = new RoomRegistry({ maxRooms: 2 });
+    expect(registry.create()).not.toBeNull();
+    expect(registry.create()).not.toBeNull();
+    expect(registry.create()).toBeNull();
+  });
+
+  it('one room throwing during tick is discarded without stopping the others', () => {
+    const registry = new RoomRegistry();
+    const bad = registry.create()!;
+    const good = registry.create()!;
+    bad.join('Ann', () => {});
+    good.join('Bo', () => {});
+    bad.tick = () => {
+      throw new Error('boom');
+    };
+    let goodTicks = 0;
+    const realTick = good.tick.bind(good);
+    good.tick = (dt) => {
+      goodTicks++;
+      realTick(dt);
+    };
+    expect(() => registry.tickAll(1 / 60)).not.toThrow();
+    expect(registry.get(bad.code)).toBeUndefined();
+    expect(registry.get(good.code)).toBe(good);
+    registry.tickAll(1 / 60);
+    expect(goodTicks).toBe(2);
   });
 
   it('tickAll also sweeps rooms that became empty', () => {
     const registry = new RoomRegistry();
-    const room = registry.create();
+    const room = registry.create()!;
     const a = room.join('Ann', () => {});
     if (!a.ok) throw new Error('join failed');
     room.disconnect(a.playerId);

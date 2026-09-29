@@ -262,7 +262,7 @@ describe('Room match: disconnect, rejoin, owner transfer', () => {
     const b = clients[1]!;
     const fresh: ServerMessage[] = [];
     room.rejoin(b.reconnectToken, (m) => fresh.push(m));
-    expect(b.inbox.at(-1)).toEqual({ type: 'error', message: 'connection replaced' });
+    expect(b.inbox.at(-1)).toEqual({ type: 'replaced' });
     const oldCount = b.inbox.length;
     ticks(room, 4);
     expect(b.inbox.length).toBe(oldCount); // the replaced sink receives nothing more

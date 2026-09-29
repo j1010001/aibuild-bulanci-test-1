@@ -125,6 +125,11 @@ describe('client view model: screens', () => {
     expect(v.snapshot?.time).toBe(6000);
   });
 
+  it("a 'replaced' notice explains that the game moved to another tab", () => {
+    const v = fold([joined, lobby, { type: 'replaced' }]);
+    expect(v.error).toMatch(/another tab|another window/i);
+  });
+
   it('records the latest error message', () => {
     expect(fold([joined, lobby, { type: 'error', message: 'skin already taken' }]).error).toBe('skin already taken');
   });
