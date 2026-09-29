@@ -688,20 +688,6 @@ is no peer-to-peer traffic.
   `createRoom` beyond that is answered `joinRejected: serverFull`). A 30 s ping heartbeat
   terminates half-open connections, so a vanished player doesn't keep a room alive.
 - A room whose tick throws is closed and removed; the loop and every other room carry on.
-
-### Headless bots
-
-`BotPlayer` (`src/client/botPlayer.ts`) plays through any `Session` with the same view
-model and `InputSender` the UI uses: as a guest it readies itself; as an owner with host
-settings it applies them and starts once the start gate opens; in a match it hunts the
-nearest opponent (line up on the axis with the smaller gap, back off when too close for
-the gun to fit, face, fire) or stands still (`idle`). After lining up it waits a reaction
-delay drawn from its own seeded generator — identical bots would otherwise fire on the
-same tick and trade kills forever — and it throttles input to stay far below the
-server's rate limit. `InProcessSession` attaches any number of bots (or a practice
-player) to an in-memory `Room`; `NetSession` attaches them to the real server.
-`npm run bot -- --create --count 3 --map open --target-score 1 --once` fills a room on a
-running server and prints the winner.
 - A single drift-corrected 60 Hz loop ticks every room (`server/loop.ts`): ticks are due
   at absolute times, so late timer wake-ups catch up rather than slowing the game, and
   after a long stall it catches up at most 5 ticks and resyncs instead of spiralling.
@@ -717,6 +703,27 @@ running server and prints the winner.
   from its player and may create or join again. When a rejoin replaces a connection, the
   old one receives `{ type: 'replaced' }`, its socket is closed (4000), and its close does
   *not* disconnect the player.
+
+### Headless bots
+
+`BotPlayer` (`src/client/botPlayer.ts`) plays through any `Session` with the same view
+model and `InputSender` the UI uses. In the lobby a guest readies itself; an owner with
+host settings applies them and starts a match whenever the start gate opens, so after
+each match the bots return to the lobby and play another. In a match it hunts the
+nearest opponent: line up on the axis with the smaller gap, face the target and fire —
+backing off only when the turn would be refused because the gun wouldn't fit, and never
+firing into an obstacle between it and the target (a line-of-fire check against obstacle
+footprints; walls lower than bullet height don't count). When it can't make progress —
+pinned against an edge or an obstacle, or lined up behind a wall — it breaks out with a
+short move in a random (seeded) other direction. After lining up it waits a reaction
+delay from its own seeded generator (identical bots would otherwise fire on the same tick
+and trade kills forever), it sends stops immediately and throttles other input to stay
+far below the server's rate limit, and it records each finished match in `results` and
+why its session closed. `InProcessSession` attaches any number of bots (or a practice
+player) to an in-memory `Room`; `NetSession` attaches them to the real server.
+`npm run bot -- --create --count 3 --target-score 1 --once` fills a room on a running
+server and prints the winner; options are validated before connecting, and a lost
+connection fails the run at once with its reason.
 
 ### Protocol
 
