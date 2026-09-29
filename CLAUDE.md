@@ -2,6 +2,7 @@
 
 - Design authority: `spec/2026-09-15-browser-party-shooter-design.md`. Read the relevant sections before changing behavior; keep it in sync with the code.
 - Work plan and milestone order: `spec/2026-09-29-v1-milestones.md`. Each numbered item in a milestone is one task.
+- Components and how they interact: `spec/architecture.md`. Update it when a milestone adds or changes a component.
 
 ## Development process (every task)
 

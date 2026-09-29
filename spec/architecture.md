@@ -1,0 +1,233 @@
+# Browser Party Shooter — Architecture Overview
+
+Date: 2026-09-29
+
+A high-level map of the components and how they interact. The detailed rules live in the
+design spec (`spec/2026-09-15-browser-party-shooter-design.md`, cited as §N below); the build
+order lives in `spec/2026-09-29-v1-milestones.md`. When this document and the design spec
+disagree, the design spec wins. Fix whichever one is wrong.
+
+**Status legend:** **built** exists today · **M0 … M4** the milestone that adds it.
+
+## 1. System overview
+
+Three deployable pieces share one environment-free core:
+
+- **Browser client:** UI, input, rendering, the network client, and practice mode.
+- **Game server:** a thin Node shell that runs rooms. It is authoritative (§4).
+- **Shared core:** the simulation, physics, geometry and the session/room model. It runs unchanged in the browser, on the server and in tests.
+
+```mermaid
+flowchart LR
+  subgraph Browser["Browser client"]
+    UI["UI screens<br/>src/ui (M1)"]
+    Input["Keyboard input<br/>src/input.ts (built)"]
+    Camera["Camera<br/>src/camera.ts (built)"]
+    Renderer["Renderer<br/>src/render.ts (built)"]
+    NetClient["Network client<br/>src/net/client.ts (M2)"]
+    Editor["Level editor<br/>src/editor (M3)"]
+    PracticeRoom["Practice: Room in-process (M1)"]
+  end
+
+  subgraph Core["Shared core (no DOM, no Node APIs)"]
+    Room["Room<br/>src/session/room.ts (M1)"]
+    Protocol["Protocol types<br/>src/session/protocol.ts (M1)"]
+    GameApi["GameApi<br/>src/api.ts (built)"]
+    Sim["Simulation<br/>src/sim (built)"]
+    Physics["PhysicsWorld (Rapier)<br/>src/physics (built)"]
+    Geometry["Geometry<br/>src/geometry (built)"]
+    MapFormat["Map loader/validator<br/>src/sim/mapFormat.ts (M0)"]
+  end
+
+  subgraph Server["Game server (Node only)"]
+    WS["HTTP + WebSocket adapter<br/>server/wsAdapter.ts (M2)"]
+    Registry["Room registry + codes<br/>server/rooms.ts (M2)"]
+    Loop["60 Hz tick loop<br/>server/loop.ts (M2)"]
+  end
+
+  Bot["Headless bot<br/>scripts/bot.ts (M2)"]
+
+  Input --> NetClient
+  Input --> PracticeRoom
+  Camera --> Input
+  Camera --> Renderer
+  NetClient <-->|"WebSocket: protocol messages"| WS
+  Bot <-->|"WebSocket"| WS
+  WS --> Registry --> Room
+  Loop -->|"tick()"| Room
+  PracticeRoom --> Room
+  NetClient -->|"snapshots"| Renderer
+  PracticeRoom -->|"snapshots"| Renderer
+  UI --> NetClient
+  UI --> PracticeRoom
+  Editor --> MapFormat
+  Editor --> Renderer
+  Room --> GameApi --> Sim --> Physics
+  Room --> Protocol
+  NetClient --> Protocol
+  Sim --> MapFormat
+  Physics --> Geometry
+  Renderer --> Geometry
+```
+
+## 2. Components
+
+| Component | Responsibility | Key files | Status |
+|---|---|---|---|
+| **Geometry** | The single conversion from an obstacle's authoring params (later also the player's shape) to 3D parts: box, cone, trimesh. Both physics and rendering consume this output, so what you see is what collides (§7, §11). | `src/geometry/obstacleGeometry.ts`, `donutMesh.ts`; `playerGeometry.ts` (M0) | built; player part M0 |
+| **PhysicsWorld** | A Rapier world used purely for collision queries: obstacle colliders built once per game, one kinematic body per player. Answers `moveDistance` (shape-cast sweep), `gunFits` (overlap), `raycastBullet`, `isFreeOfObstacles`. The one live, non-serializable part of `State`. | `src/physics/world.ts`, `obstacles.ts`, `rapier.ts` | built |
+| **Simulation (`sim`)** | Game rules. `createGame(RAPIER, config, map, roster, seed)` and `step(state, inputs, dt) → {state, events}`: movement, turning, shooting, deaths, rounds, match, spawns. Deterministic given the seed (§4). | `src/sim/{state,step,spawn,rng,types,snapshot}.ts` | built |
+| **Map loader** | The one entry point for every map (built-in, preset, import, received by the server): version check, defaults, hard constraints. | `src/sim/mapFormat.ts` | M0 |
+| **GameApi** | A control surface over one game: roster, `start({seed})`, `setMoveDir` / `pressShoot`, `tick` / `runTicks`, `getState` / `getEvents`, `pause` / `resume`. The keyboard and AI harnesses call the same methods. Exposed as `window.GameAPI`. | `src/api.ts` | built |
+| **Room** | The session: lobby (roster, owner, unique skins, ready, map, config, start gate), match lifecycle, input latching, disconnect/reconnect, ownership transfer. Emits protocol messages. Time is injected; it never owns a timer. | `src/session/room.ts`, `protocol.ts` | M1 |
+| **Game server** | Node shell: WebSocket connections, room codes, a drift-corrected 60 Hz loop per room, snapshots at 30 Hz, reconnect tokens, empty-room cleanup. The only place Node APIs are allowed. | `server/*` | M2 |
+| **Network client** | Browser side of the protocol: sends input when it changes, drops stale snapshots, interpolates between the last two snapshots. | `src/net/client.ts` | M2 |
+| **Renderer** | three.js scene as a pure function of a snapshot. Fixed tilted camera, framing computed from board size; obstacle meshes from Geometry; HUD. | `src/render.ts` | built (HUD M1) |
+| **Camera + Input** | Camera azimuth is the source of truth. Arrow and IJKL key mappings are derived from it (§8), then turned into `{moveDir, shoot}`. | `src/camera.ts`, `src/input.ts` | built |
+| **UI screens** | Home → Practice / Create / Join / Editor → Lobby → Match → Match end. | `src/ui/*` | M1 |
+| **Level editor** | `EditorApi` (headless) plus a 2D surface and a live 3D preview; validation, presets, JSON import/export. | `src/editor/*` | M3 |
+| **Bot client** | Drives a player over a real WebSocket using the same protocol, so AI tests can fill rooms without a browser. | `scripts/bot.ts` | M2 |
+
+## 3. Dependency rules
+
+The arrows point from dependent to dependency. Nothing points upward.
+
+```mermaid
+flowchart TD
+  ServerShell["server/ (Node APIs allowed)"] --> Session
+  ClientShell["Browser: ui, input, net client, editor"] --> Session
+  ClientShell --> Render["render.ts"]
+  Session["session: Room, protocol"] --> Api["api.ts: GameApi"]
+  Api --> SimCore["sim"]
+  SimCore --> Phys["physics"]
+  Phys --> Geom["geometry"]
+  Render --> Geom
+  Render --> CameraMod["camera.ts"]
+  ClientShell --> CameraMod
+```
+
+- `geometry`, `physics`, `sim`, `api` and `session` are **environment-free**: no DOM, no Node APIs, no timers they own, no `Math.random` in game state (§4).
+- Only `server/` may use Node APIs, and it never imports browser code. This is enforced by its own tsconfig with no `dom` lib (§4 isolation rule). Moving the server to another host is a config change (`VITE_SERVER_URL`), not a code change.
+- The renderer and the physics world both depend on `geometry`, and never on each other. That shared dependency is what guarantees render/collision agreement.
+
+## 4. Key interactions
+
+### 4.1 One simulation tick (`step`)
+
+```mermaid
+sequenceDiagram
+  participant Caller as GameApi or Room
+  participant Step as sim.step
+  participant Phys as PhysicsWorld
+  participant Spawn as spawn + rng
+  Caller->>Step: step(state, inputs, dt)
+  Step->>Phys: setPlayerPosition(every player)
+  loop each player (sorted by id)
+    Step->>Phys: gunFits(new facing)? (only on a turn)
+    Step->>Phys: moveDistance(dir, speed*dt)
+    Step->>Phys: applyMove(advance)
+  end
+  loop each bullet (new ones start at the body edge)
+    Step->>Phys: raycastBullet(pos, dir, distance, H)
+  end
+  Step->>Phys: setPlayerEnabled(victim, false)
+  Step->>Step: resolve round and match
+  opt round ended
+    Step->>Spawn: assignSpawns (draws from state.rngState)
+  end
+  Step-->>Caller: {state, events}
+```
+
+State outside physics is copied per tick. The physics world is shared and mutated in place, which is why each replay needs a fresh game (§15).
+
+### 4.2 Map load: one geometry, two consumers
+
+```mermaid
+flowchart LR
+  Map["MapDef (JSON)"] --> Loader["mapFormat: validate + defaults (M0)"]
+  Loader --> Def["ObstacleDef[]"]
+  Def --> Build["buildObstacleGeometry(def)"]
+  Build -->|"box / cone / trimesh parts"| Colliders["physics/obstacles.ts → Rapier colliders"]
+  Build -->|"same parts"| Meshes["render.ts buildObstacleMesh → three.js meshes"]
+```
+
+The donut's trimesh collider and its render mesh use the same vertex and index buffers. `obstacleMesh.test.ts` checks that the render side matches the shared spec.
+
+### 4.3 Multiplayer session (M1 + M2)
+
+```mermaid
+sequenceDiagram
+  participant A as Client A (owner)
+  participant B as Client B
+  participant S as Server (ws + registry)
+  participant R as Room
+  participant L as Tick loop
+  A->>S: createRoom
+  S->>R: new Room(owner A)
+  S-->>A: roomJoined {code, playerId, reconnectToken}
+  B->>S: joinRoom {code}
+  S->>R: join(B)
+  R-->>A: lobby
+  R-->>B: lobby
+  A->>R: setMap / setConfig / startMatch
+  R->>R: validate map, GameApi.start(seed)
+  R-->>A: matchStart {map, config, players}
+  R-->>B: matchStart
+  loop every 1/60 s
+    L->>R: tick()
+    Note over R: inputs latched since last tick
+  end
+  A->>R: input {seq, moveDir, shoot}
+  R-->>A: snapshot {seq, dynamic state} (30 Hz)
+  R-->>B: snapshot
+  R-->>A: event {roundEnd, ...}
+  Note over B,S: B's socket drops
+  S->>R: disconnect(B) → connected=false
+  B->>S: rejoin {code, reconnectToken}
+  S->>R: reconnect(B), same playerId
+```
+
+When the owner leaves, the owner role passes to the next connected player (`ownerChanged`) and the match continues (§14).
+
+### 4.4 Practice (M1)
+
+A `Room` runs inside the page, driven by the page's own `requestAnimationFrame` fixed-timestep loop. Its snapshots go straight to the renderer. There is no server and no network. The rules, lobby model and messages are the same as in multiplayer.
+
+### 4.5 Three ways to drive the game headlessly (AI and tests)
+
+| Path | Scope | Speed | Status |
+|---|---|---|---|
+| `GameApi.runTicks(n)` | One game, rules only | Far faster than real time; deterministic with a seed | built |
+| `Room` + in-memory adapter | Lobby, match, multiple clients, disconnects | Fast, no sockets | M1/M2 |
+| `scripts/bot.ts` over WebSocket | The real server end to end | Real time | M2 |
+
+`GameApi.pause()` stops the live page's own loop so an AI can call `runTicks` against `window.GameAPI` without both loops advancing the same state (§4).
+
+## 5. State and data ownership
+
+- **Authoritative state:** `State` inside one `GameApi`, owned by one `Room`. On the server in multiplayer; in the page in practice.
+- **`State.physics`:** a live handle, never serialized. `toSnapshot()` strips it.
+- **Network data:**
+  - `matchStart` carries the static map and config once.
+  - Snapshots carry only dynamic state: players, bullets, scores, phase, round and time.
+  - Clients never send state, only input.
+- **Reproducibility:** `State.seed` plus the input sequence fully determine a run.
+- **Persistent client data (M3):** map presets in `localStorage`. The server stores nothing; it has no database.
+
+## 6. Deployment
+
+| | Local development (M2 onward) | Production (M4) |
+|---|---|---|
+| Client | Vite dev server `:5173` | Static build, served by the same app as the server |
+| Server | `npm run dev` also starts `server/` on `:8787` (`tsx watch`) | One Fly.io app: static client + WebSocket |
+| Client → server | `VITE_SERVER_URL=ws://localhost:8787` (default) | `VITE_SERVER_URL=wss://<app host>` |
+
+## 7. Cross-cutting invariants
+
+These are the rules that have regressed before (details in `CLAUDE.md` and the §N references):
+
+1. **What you see is what's solid.** Render and collision come from one geometry function (§7, §11).
+2. **One source of truth for values that must agree.** For example, the camera azimuth drives the key mapping (§8).
+3. **Determinism.** No game state depends on `Math.random`, and the seed is recorded (§4).
+4. **API-first.** Every UI action is available headlessly through `GameApi`, the `Room`, or the editor API.
+5. **Server isolation.** The shared core is environment-free, and Node APIs appear only in `server/` (§4).
