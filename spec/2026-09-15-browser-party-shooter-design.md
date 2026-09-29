@@ -900,8 +900,12 @@ the default is a map whose author never chose.
     and starting; two bots playing an in-memory match to an agreed winner; the rate
     limit respected; seeded reaction delays; three bots over real sockets; the CLI end
     to end.
-  - A two-tab browser smoke test against the local server: create code → join → shoot →
-    death → round → match.
+  - Two-browser smoke test (`tests/e2e/multiplayer.spec.ts`, `npm run test:e2e`,
+    Playwright): two separate browser contexts create a room, join it by code, ready,
+    set the map and score, start, and one player kills the other with real key presses
+    (decisions from the bots' strategy) until both screens show the same winner; then
+    back to the lobby; no page errors. Plus practice moving with real keys. The test
+    starts its own game server and Vite on dedicated ports (8797 / 5197).
   - The server compiles under its own no-DOM tsconfig (the §4 isolation rule).
 - **Camera/input alignment** (pure, unit-tested — the one part of "rendering" that isn't
   just a visual smoke test, because it's a correctness property, not a look-and-feel

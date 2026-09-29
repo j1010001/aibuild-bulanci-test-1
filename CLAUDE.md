@@ -20,10 +20,11 @@
 
 ## Verify before calling anything done
 
-- `npx tsc --noEmit`
-- `npx vitest run`: the full suite, not just new tests
+- `npm run typecheck`: all tsconfigs, including the isolation checks (core with no DOM/Node types, server with no DOM)
+- `npx vitest run`: the full unit + integration suite, not just new tests
+- `npm run test:e2e`: the two-browser Playwright smoke test
 - `npm run build`
-- For anything observable in the running app: check the live dev server (the `dev` config in `.claude/launch.json`) through `window.GameAPI`, not by eye alone. Call `GameAPI.pause()` before driving it with `runTicks()`.
+- For anything observable in the running app: check the live dev server (`npm run dev` = Vite + game server; the `dev` config in `.claude/launch.json`) through `window.GameClient` (and `window.GameAPI` in practice), not by eye alone. In practice, call `GameClient.pause()` before driving it with `runTicks()`. `npm run bot -- --create --count 3 --once` plays a headless match against a running server.
 
 ## Architecture rules that have regressed before
 

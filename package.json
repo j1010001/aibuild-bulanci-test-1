@@ -12,7 +12,8 @@
     "preview": "vite preview",
     "test": "vitest run",
     "test:watch": "vitest",
-    "bot": "tsx scripts/bot.ts"
+    "bot": "tsx scripts/bot.ts",
+    "test:e2e": "playwright test"
   },
   "dependencies": {
     "@dimforge/rapier3d-compat": "^0.21.0",
@@ -20,6 +21,7 @@
     "ws": "^8.22.0"
   },
   "devDependencies": {
+    "@playwright/test": "^1.63.0",
     "@types/node": "^26.6.3",
     "@types/three": "^0.169.0",
     "@types/ws": "^8.18.2",
