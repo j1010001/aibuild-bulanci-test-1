@@ -383,6 +383,18 @@ describe('Room: resource safety', () => {
     ticks(room, 5); // no-op, no throw
   });
 
+  it('dispose() while a match is starting leaves no game behind once the start completes', async () => {
+    const room = newRoom();
+    const a = join(room, 'Ann');
+    const b = join(room, 'Bo');
+    await room.handle(b.playerId, { type: 'setReady', ready: true });
+    const starting = room.handle(a.playerId, { type: 'startMatch' });
+    room.dispose();
+    await starting;
+    expect(room.gameApi).toBeNull();
+    expect(room.phase).toBe('lobby');
+  });
+
   it('a match that fails to start reports an error to the owner and stays in the lobby', async () => {
     const room = newRoom({ seed: 1.5 }); // createGame rejects a non-integer seed
     const a = join(room, 'Ann');

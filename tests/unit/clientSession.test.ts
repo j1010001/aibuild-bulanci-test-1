@@ -25,6 +25,15 @@ describe('InputSender', () => {
     ]);
   });
 
+  it('reset() forgets the last movement, so a new match hears the held direction again', () => {
+    const sent: ClientMessage[] = [];
+    const input = new InputSender((m) => sent.push(m));
+    input.setMoveDir('+X');
+    input.reset();
+    input.setMoveDir('+X');
+    expect(sent.filter((m) => m.type === 'input' && m.moveDir === '+X')).toHaveLength(2);
+  });
+
   it('a shot carries the current movement, and every message has a strictly increasing seq', () => {
     const sent: ClientMessage[] = [];
     const input = new InputSender((m) => sent.push(m));
@@ -62,12 +71,36 @@ describe('LocalSession (practice)', () => {
     expect(inbox.filter((m) => m.type === 'snapshot').length).toBe(before + 1);
   });
 
-  it('delivers exactly what the network would: every message survives a JSON round trip unchanged', async () => {
+  // Test change, with justification (review): the old version only checked that messages
+  // were JSON-safe, which Room output already is — it would pass with no copying at all.
+  // What matters is that the client can never alias the room's live state.
+  it('delivers copies: mutating a delivered snapshot cannot touch the room', async () => {
     const { session, inbox } = started();
     await session.send({ type: 'startMatch' });
     session.tick(1 / 60);
     session.tick(1 / 60);
+    const snap = inbox.filter((m) => m.type === 'snapshot').at(-1) as Extract<ServerMessage, { type: 'snapshot' }>;
+    const id = snap.state.players[0]!.id;
+    const realX = session.room.gameApi!.getPlayer(id)!.pos.x;
+    snap.state.players[0]!.pos.x = 999;
+    expect(session.room.gameApi!.getPlayer(id)!.pos.x).toBe(realX);
     for (const m of inbox) expect(JSON.parse(JSON.stringify(m))).toEqual(m);
+  });
+
+  it('runs the practice name through the same parser as the server', () => {
+    const session = new LocalSession({ seed: 5 });
+    const inbox: ServerMessage[] = [];
+    session.onMessage((m) => inbox.push(m));
+    session.start('\u202EAnn\u200B');
+    const lobby = inbox.find((m) => m.type === 'lobby') as Extract<ServerMessage, { type: 'lobby' }>;
+    expect(lobby.players[0]!.name).toBe('Ann');
+
+    const other = new LocalSession({ seed: 5 });
+    const inbox2: ServerMessage[] = [];
+    other.onMessage((m) => inbox2.push(m));
+    other.start('   ');
+    const lobby2 = inbox2.find((m) => m.type === 'lobby') as Extract<ServerMessage, { type: 'lobby' }>;
+    expect(lobby2.players[0]!.name).toBe('Player');
   });
 
   it('drops malformed client messages instead of passing them to the room', async () => {
@@ -104,13 +137,27 @@ describe('LocalSession (practice)', () => {
     expect(inbox.some((m) => m.type === 'matchStart')).toBe(true);
   });
 
-  it('close() stops delivery', async () => {
+  it('close() stops delivery, frees the room, ignores later sends, is safe to repeat, and reports the close once', async () => {
     const { session, inbox } = started();
+    let closes = 0;
+    session.onClose(() => closes++);
     await session.send({ type: 'startMatch' });
     session.close();
     const count = inbox.length;
     session.tick(1 / 60);
     session.tick(1 / 60);
+    await session.send({ type: 'setReady', ready: true });
+    session.close();
     expect(inbox.length).toBe(count);
+    expect(session.room.gameApi).toBeNull();
+    expect(closes).toBe(1);
+  });
+
+  it('close() while the match is still starting does not leave a running game behind', async () => {
+    const { session } = started();
+    const pending = session.send({ type: 'startMatch' });
+    session.close();
+    await pending;
+    expect(session.room.gameApi).toBeNull();
   });
 });

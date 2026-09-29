@@ -99,6 +99,32 @@ describe('client view model: screens', () => {
     expect(v.screen).toBe('match');
   });
 
+  it('a new matchStart after a finished match clears the old result', () => {
+    const final = dyn({ phase: 'matchEnd', winnerId: 'p1' });
+    const v = fold([joined, lobby, matchStart, { type: 'snapshot', seq: 1, state: final }, lobby, matchStart]);
+    expect(v.screen).toBe('match');
+    expect(v.result).toBeNull();
+    expect(v.snapshot).toBeNull();
+  });
+
+  it('an error during a match keeps the match screen', () => {
+    const v = fold([joined, matchStart, { type: 'snapshot', seq: 1, state: dyn() }, { type: 'error', message: 'nope' }]);
+    expect(v.screen).toBe('match');
+    expect(v.error).toBe('nope');
+  });
+
+  it('a new roomJoined (reconnect) accepts snapshots from seq 0 again', () => {
+    const v = fold([
+      joined,
+      matchStart,
+      { type: 'snapshot', seq: 50, state: dyn({ time: 5000 }) },
+      joined,
+      matchStart,
+      { type: 'snapshot', seq: 1, state: dyn({ time: 6000 }) },
+    ]);
+    expect(v.snapshot?.time).toBe(6000);
+  });
+
   it('records the latest error message', () => {
     expect(fold([joined, lobby, { type: 'error', message: 'skin already taken' }]).error).toBe('skin already taken');
   });
