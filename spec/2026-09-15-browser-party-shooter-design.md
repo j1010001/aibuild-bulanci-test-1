@@ -308,8 +308,11 @@ never moves after load).
   `playerHeight` (two stacked cylinders), and the gun, a thin box at bullet height from
   `R` to `muzzleOffset`. Parts must be convex — players move, and a moving shape can only
   be swept against the static donut trimesh if it is convex — so a future detailed model
-  becomes several convex pieces or a convex hull. Changing how a player looks and
-  collides means changing that one function.
+  becomes several convex pieces or a convex hull. Body parts must also be symmetric about
+  the vertical axis (cylinders or cones centered on it), because the body's colliders
+  don't turn with the facing; the gun is the part that turns (`orientPart`, which applies
+  exactly the renderer's rotation). Changing how a player looks and collides means
+  changing that one function.
 - **Player movement**: the player's real body — a cylinder of radius `R` and height
   `playerHeight`, resting on the ground — is shape-cast along the movement direction;
   the swept distance to first contact (against any obstacle or any other living
@@ -319,9 +322,11 @@ never moves after load).
 - **Gun**: the barrel part, turned to `facing`, is shape-cast alongside the body, and
   movement clamps at whichever part makes contact first. Since `muzzleOffset > R`, the
   gun leads wherever something stands at bullet height; over a wall lower than that, the
-  gun passes over and the body is what stops. A moving player's gun is checked against
-  every *other* player's body (so nobody walks into someone's gun) — guns are never
-  colliders, so they are never checked against other guns. (Until M0 task 2 the gun
+  gun passes over and the body is what stops. Each player's gun is also a collider,
+  turned with the facing, and solid to other players' *bodies*: a body walking into
+  someone's barrel from any side stops against it, so a gun never ends up inside another
+  player. Bullets pass through guns (a hit is a hit on the body), and guns are never
+  checked against other guns — two barrels may cross. (Until M0 task 2 the gun
   collided as an invisible slab from the ground to `playerHeight` while being drawn as a
   thin barrel — a visual/collision mismatch of exactly the kind §11 forbids.)
 - **Turning**: an instantaneous 90°/180° facing change re-checks only the gun (the body
@@ -405,7 +410,10 @@ and real body/bullet heights, not hand-coded per-case booleans:
 - **Low wall** (cube/cone shorter than `bulletHeight`): a player's body starts at the
   ground and is blocked by any positive height of solid material there, however short;
   a bullet flying at `bulletHeight`, above the wall's top, passes over. Cover from
-  people, none from gunfire.
+  people, none from gunfire. The gun barrel (a thin box around `bulletHeight`, 0.08 tall)
+  passes over it too — except a wall within the barrel's half-thickness of
+  `bulletHeight` (about 0.86–0.9 at the defaults), which the barrel catches although a
+  bullet still clears it.
 - **Low slot** (an arch whose `doorHeight` is strictly between `bulletHeight` and
   `playerHeight`): the opposite of what v1 originally called a "low tunnel." A real
   gap that low lets a bullet fly under the lintel but is too short for a full-height
@@ -597,6 +605,9 @@ replaced.
   the bullet's point position at height `H` (a bullet collides as a point), with a short
   streak trailing along the path, so the tilt makes hole-crossing visually true.
 - Fixed lighting; subtle floor grid/hint for spatial reading. No post-processing in v1.
+- Round parts (cylinders, cones) are drawn as 64-sided polygons inscribed in the exact
+  circle the collider uses, so the drawn outline is within 0.12% of the collider's; the
+  donut's washer mesh is the collider itself.
 - **HUD** (DOM overlay, derived from the ClientView by `src/client/hud.ts`): round number
   and a countdown from `roundTime`; each player's color, name ("you" marked) and score,
   highest first, dimmed when dead and struck through when disconnected; a two-second

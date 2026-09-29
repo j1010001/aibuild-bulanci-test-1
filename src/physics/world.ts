@@ -10,8 +10,15 @@
 
 import type { Collider, RigidBody, Shape, World } from '@dimforge/rapier3d-compat';
 import { buildObstacleGeometry } from '../geometry/obstacleGeometry';
-import { buildPlayerGeometry, type ConvexPart, type PlayerGeometry, type PlayerShapeConfig } from '../geometry/playerGeometry';
-import { addObstacleToWorld, buildColliderDesc, groupsBitmask, OBSTACLE_COLLISION_GROUP, PLAYER_COLLISION_GROUP } from './obstacles';
+import { buildPlayerGeometry, orientPart as orient, type ConvexPart, type PlayerGeometry, type PlayerShapeConfig } from '../geometry/playerGeometry';
+import {
+  addObstacleToWorld,
+  buildColliderDesc,
+  groupsBitmask,
+  GUN_COLLISION_GROUP,
+  OBSTACLE_COLLISION_GROUP,
+  PLAYER_COLLISION_GROUP,
+} from './obstacles';
 import type { Rapier } from './rapier';
 import type { Direction, MapDef, PlayerId, Vec2 } from '../sim/types';
 import { DIR_VECTOR } from '../sim/types';
@@ -19,27 +26,18 @@ import { DIR_VECTOR } from '../sim/types';
 const IDENTITY_ROTATION = { x: 0, y: 0, z: 0, w: 1 };
 const SKIN = 0.001; // small safety margin so a shapecast's "safe" advance never ends in exact contact
 
+// What each query tests against (collision-group filters). Guns are colliders so that a
+// body stops against another player's gun (what you see is what's solid), but bullets
+// pass through guns and guns are never checked against other guns (spec §7).
+const BODY_QUERY = groupsBitmask(0xffff, OBSTACLE_COLLISION_GROUP | PLAYER_COLLISION_GROUP | GUN_COLLISION_GROUP);
+const GUN_QUERY = groupsBitmask(0xffff, OBSTACLE_COLLISION_GROUP | PLAYER_COLLISION_GROUP);
+const BULLET_QUERY = GUN_QUERY;
+
 type Vec3 = { x: number; y: number; z: number };
 
 function dirToVelocity(dir: Direction): Vec3 {
   const v = DIR_VECTOR[dir];
   return { x: v.x, y: 0, z: v.y };
-}
-
-/**
- * A player part turned to face `dir`, as an offset from the player's ground position plus
- * a world-axis-aligned shape. Local +Z (forward) becomes the facing, local +X its right-hand
- * side; box extents swap accordingly. Cylinders and cones are vertical, so they don't change.
- */
-function orient(part: ConvexPart, dir: Direction): { offset: Vec3; part: ConvexPart } {
-  const f = DIR_VECTOR[dir]; // forward, in world (x, z)
-  const r = { x: f.y, y: -f.x }; // right-hand side
-  const c = part.center;
-  const offset = { x: c.x * r.x + c.z * f.x, y: c.y, z: c.x * r.y + c.z * f.y };
-  if (part.kind !== 'box') return { offset, part };
-  const width = Math.abs(r.x) * part.width + Math.abs(f.x) * part.depth;
-  const depth = Math.abs(r.y) * part.width + Math.abs(f.y) * part.depth;
-  return { offset, part: { ...part, width, depth } };
 }
 
 export type BulletHit = { distance: number; hitPlayerId: PlayerId | null };
@@ -50,6 +48,8 @@ export class PhysicsWorld {
   private readonly shape: PlayerGeometry;
   private readonly playerBodies = new Map<PlayerId, RigidBody>();
   private readonly playerColliders = new Map<PlayerId, Collider[]>();
+  private readonly playerGuns = new Map<PlayerId, { facing: Direction; colliders: Collider[] }>();
+  private readonly playerEnabled = new Map<PlayerId, boolean>();
   private readonly colliderOwner = new Map<number, PlayerId>(); // collider handle -> player id
   readonly board: { width: number; height: number };
 
@@ -69,31 +69,57 @@ export class PhysicsWorld {
 
   addPlayer(id: PlayerId, pos: Vec2): void {
     // The body's origin is the player's footprint center on the ground; each body part is
-    // a collider at its local offset. The gun is not a collider (other bodies don't collide
-    // with it); it is swept and tested explicitly (moveDistance, gunFits).
+    // a collider at its local offset. The gun's colliders are rebuilt whenever the facing
+    // changes (setPlayerFacing); they start facing +X, as createGame does.
     const body = this.world.createRigidBody(this.RAPIER.RigidBodyDesc.kinematicPositionBased().setTranslation(pos.x, 0, pos.y));
     const colliders = this.shape.body.map(({ part }) =>
       this.world.createCollider(buildColliderDesc(this.RAPIER, part).setCollisionGroups(groupsBitmask(PLAYER_COLLISION_GROUP, 0xffff)), body),
     );
     this.playerBodies.set(id, body);
     this.playerColliders.set(id, colliders);
+    this.playerEnabled.set(id, true);
     for (const c of colliders) this.colliderOwner.set(c.handle, id);
+    this.playerGuns.set(id, { facing: '+X', colliders: this.createGunColliders(body, '+X') });
     this.world.step();
+  }
+
+  /** Turns the player's gun collider to `dir` (a no-op when it already faces that way). */
+  setPlayerFacing(id: PlayerId, dir: Direction): void {
+    const body = this.playerBodies.get(id);
+    const gun = this.playerGuns.get(id);
+    if (!body || !gun || gun.facing === dir) return;
+    for (const c of gun.colliders) this.world.removeCollider(c, false);
+    const colliders = this.createGunColliders(body, dir);
+    for (const c of colliders) c.setEnabled(this.playerEnabled.get(id) ?? true);
+    this.playerGuns.set(id, { facing: dir, colliders });
+    this.world.step();
+  }
+
+  private createGunColliders(body: RigidBody, dir: Direction): Collider[] {
+    return this.shape.gun.map(({ part }) =>
+      this.world.createCollider(
+        buildColliderDesc(this.RAPIER, orient(part, dir).part).setCollisionGroups(groupsBitmask(GUN_COLLISION_GROUP, 0xffff)),
+        body,
+      ),
+    );
   }
 
   removePlayer(id: PlayerId): void {
     const body = this.playerBodies.get(id);
     if (!body) return;
     for (const c of this.playerColliders.get(id) ?? []) this.colliderOwner.delete(c.handle);
-    this.world.removeRigidBody(body);
+    this.world.removeRigidBody(body); // also removes its body and gun colliders
     this.playerBodies.delete(id);
     this.playerColliders.delete(id);
+    this.playerGuns.delete(id);
+    this.playerEnabled.delete(id);
   }
 
   /** Dead or disconnected players are inert (spec §10) — excluded from every query
    * (movement blocking, gun-fit, bullet hits) without removing their body/state. */
   setPlayerEnabled(id: PlayerId, enabled: boolean): void {
-    for (const c of this.playerColliders.get(id) ?? []) c.setEnabled(enabled);
+    for (const c of [...(this.playerColliders.get(id) ?? []), ...(this.playerGuns.get(id)?.colliders ?? [])]) c.setEnabled(enabled);
+    this.playerEnabled.set(id, enabled);
     this.world.step(); // queries only see the change once the query pipeline is updated
   }
 
@@ -116,6 +142,7 @@ export class PhysicsWorld {
    * returns the distance clear to travel (0..distance): movement clamps at the first
    * contact of any part (spec §7). Since the muzzle reaches past the body, the gun leads
    * wherever something stands at gun height; over a low wall, the body is what stops.
+   * The body stops against other players' guns too; the gun ignores other guns.
    */
   moveDistance(id: PlayerId, dir: Direction, distance: number): number {
     if (distance <= 0) return 0;
@@ -123,10 +150,11 @@ export class PhysicsWorld {
     const pos = body.translation();
     const vel = dirToVelocity(dir);
     let advance = distance;
-    for (const { part } of [...this.shape.body, ...this.shape.gun]) {
+    const parts = [...this.shape.body.map((p) => ({ ...p, query: BODY_QUERY })), ...this.shape.gun.map((p) => ({ ...p, query: GUN_QUERY }))];
+    for (const { part, query } of parts) {
       const o = orient(part, dir);
       const center = { x: pos.x + o.offset.x, y: o.offset.y, z: pos.z + o.offset.z };
-      const hit = this.world.castShape(center, IDENTITY_ROTATION, vel, this.rapierShape(o.part), 0, distance, true, undefined, undefined, undefined, body);
+      const hit = this.world.castShape(center, IDENTITY_ROTATION, vel, this.rapierShape(o.part), 0, distance, true, undefined, query, undefined, body);
       if (hit) advance = Math.min(advance, Math.max(0, hit.time_of_impact - SKIN));
     }
     return advance;
@@ -153,7 +181,7 @@ export class PhysicsWorld {
     return this.shape.gun.every(({ part }) => {
       const o = orient(part, dir);
       const center = { x: pos.x + o.offset.x, y: o.offset.y, z: pos.y + o.offset.z };
-      return this.world.intersectionWithShape(center, IDENTITY_ROTATION, this.rapierShape(o.part), undefined, undefined, undefined, body) === null;
+      return this.world.intersectionWithShape(center, IDENTITY_ROTATION, this.rapierShape(o.part), undefined, GUN_QUERY, undefined, body) === null;
     });
   }
 
@@ -173,7 +201,7 @@ export class PhysicsWorld {
     const v = DIR_VECTOR[dir];
     const nudged = { x: startPos.x + v.x * SKIN, y: startPos.y + v.y * SKIN };
     const ray = new this.RAPIER.Ray({ x: nudged.x, y: bulletHeight, z: nudged.y }, { x: v.x, y: 0, z: v.y });
-    const hit = this.world.castRay(ray, Math.max(0, distance - SKIN), true);
+    const hit = this.world.castRay(ray, Math.max(0, distance - SKIN), true, undefined, BULLET_QUERY);
     if (!hit) return null;
     const hitPlayerId = this.colliderOwner.get(hit.collider.handle) ?? null;
     return { distance: hit.timeOfImpact + SKIN, hitPlayerId };

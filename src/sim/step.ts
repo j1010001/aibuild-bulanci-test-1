@@ -64,6 +64,7 @@ function resolvePlayerMovement(state: State, player: State['players'][number], m
       return;
     }
     player.facing = moveDir;
+    physics.setPlayerFacing(player.id, moveDir);
   }
 
   const distance = state.config.playerSpeed * dt;
@@ -92,7 +93,10 @@ export function step(state: State, inputs: Record<PlayerId, PlayerInput>, dt: nu
   // wherever it last was, silently missing bullets/gun-fit checks aimed at their real
   // position. resolvePlayerMovement below only needs to push the position it computes
   // back into physics for players who actually move.
-  for (const player of ordered) next.physics.setPlayerPosition(player.id, player.pos);
+  for (const player of ordered) {
+    next.physics.setPlayerPosition(player.id, player.pos);
+    next.physics.setPlayerFacing(player.id, player.facing);
+  }
 
   for (const player of ordered) {
     const moveDir = inputs[player.id]?.moveDir ?? null;

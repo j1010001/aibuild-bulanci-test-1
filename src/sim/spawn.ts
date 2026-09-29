@@ -101,6 +101,7 @@ export function assignSpawns(state: State, events: GameEvent[]): void {
       player.facing = fb.facing;
     }
     state.physics.setPlayerPosition(player.id, player.pos);
+    state.physics.setPlayerFacing(player.id, player.facing);
     state.physics.setPlayerEnabled(player.id, true);
     chosen.push(player.pos);
   }

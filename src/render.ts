@@ -26,6 +26,9 @@ const TRACER_LENGTH = 0.6;
 const BULLET_GEOMETRY = new THREE.BoxGeometry(0.04, 0.04, TRACER_LENGTH).translate(0, 0, -TRACER_LENGTH / 2);
 const BULLET_MATERIAL = new THREE.MeshBasicMaterial({ color: 0xfff3b0 });
 const DRESS_COLOR = 0x2f7a3d;
+// Round parts are drawn as polygons inscribed in the true circle the collider uses; 64 sides
+// keep the drawn outline within 0.12% of it (24 sides were up to 0.86% narrower).
+const ROUND_SEGMENTS = 64;
 const GUN_COLOR = 0x333333;
 
 /** Frees the GPU buffers of everything under `root` (removing from the scene alone does not). */
@@ -41,7 +44,8 @@ function disposeTree(root: THREE.Object3D): void {
   });
 }
 
-function facingAngle(dir: keyof typeof DIR_VECTOR): number {
+/** The renderer's turn for a facing (three.js rotation about y); physics mirrors it in orientPart. */
+export function facingAngle(dir: keyof typeof DIR_VECTOR): number {
   const v = DIR_VECTOR[dir];
   return Math.atan2(v.x, v.y); // three.js Y-axis rotation, world (x,y) -> three (x,z)
 }
@@ -191,12 +195,11 @@ export class Renderer {
       seen.add(b.id);
       let mesh = this.bulletMeshes.get(b.id);
       if (!mesh) {
-        mesh = new THREE.Mesh(BULLET_GEOMETRY, BULLET_MATERIAL);
+        mesh = bulletMesh(b.dir); // a bullet never changes direction
         this.bulletMeshes.set(b.id, mesh);
         this.scene.add(mesh);
       }
       mesh.position.set(b.pos.x, state.config.bulletHeight, b.pos.y);
-      mesh.rotation.y = facingAngle(b.dir); // the streak trails behind the tip, along the path
     }
     for (const [id, mesh] of this.bulletMeshes) {
       if (!seen.has(id)) {
@@ -205,6 +208,13 @@ export class Renderer {
       }
     }
   }
+}
+
+/** A bullet's tracer, turned so the streak trails behind the tip along the path. */
+export function bulletMesh(dir: keyof typeof DIR_VECTOR): THREE.Mesh {
+  const mesh = new THREE.Mesh(BULLET_GEOMETRY, BULLET_MATERIAL);
+  mesh.rotation.y = facingAngle(dir);
+  return mesh;
 }
 
 /** Exported for testing: the player drawn from exactly the parts the physics world
@@ -228,9 +238,9 @@ function meshFromPart(part: PartSpec, material: THREE.Material): THREE.Mesh {
     part.kind === 'box'
       ? new THREE.BoxGeometry(part.width, part.height, part.depth)
       : part.kind === 'cone'
-        ? new THREE.ConeGeometry(part.radius, part.height, 24)
+        ? new THREE.ConeGeometry(part.radius, part.height, ROUND_SEGMENTS)
         : part.kind === 'cylinder'
-          ? new THREE.CylinderGeometry(part.radius, part.radius, part.height, 24)
+          ? new THREE.CylinderGeometry(part.radius, part.radius, part.height, ROUND_SEGMENTS)
           : part.geometry;
   const mesh = new THREE.Mesh(geometry, material);
   mesh.position.set(part.center.x, part.center.y, part.center.z);
