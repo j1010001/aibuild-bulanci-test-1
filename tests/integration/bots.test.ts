@@ -6,12 +6,14 @@ import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { BotPlayer } from '../../src/client/botPlayer';
 import { NetSession } from '../../src/net/client';
 import { startServer, type RunningServer } from '../../server/server';
+import { RoomRegistry } from '../../server/rooms';
 
 let server: RunningServer;
 let url: string;
 
 beforeAll(async () => {
-  server = await startServer({ port: 0 });
+  // Seeded rooms: spawns are reproducible, so a strategy bug shows up every run, not sometimes.
+  server = await startServer({ port: 0, registry: new RoomRegistry({ roomOptions: { seed: 11 } }) });
   url = `ws://127.0.0.1:${server.port}`;
 });
 
@@ -40,28 +42,60 @@ describe('bots over the real server', () => {
       for (const b of bots) b.step(performance.now());
     }, 30);
     try {
-      await until(() => bots.every((b) => b.view.screen === 'matchEnd'), 20_000);
+      await until(() => bots.every((b) => b.results.length >= 1), 20_000);
     } finally {
       clearInterval(timer);
     }
-    const result = host.view.result!;
+    const result = host.results[0]!;
     expect(result.winnerId).not.toBeNull();
-    for (const b of guests) expect(b.view.result).toEqual(result);
+    for (const b of guests) expect(b.results[0]).toEqual(result);
     for (const b of bots) b.close();
   }, 30_000);
 
-  it('the bot CLI creates a room, fills it and reports the winner', async () => {
-    const out = await new Promise<{ code: number | null; stdout: string }>((resolve) => {
-      const child = spawn('npx', ['tsx', 'scripts/bot.ts', '--server', url, '--create', '--count', '2', '--map', 'open', '--target-score', '1', '--once'], {
-        cwd: process.cwd(),
-      });
+  // Test change, with justification (review finding 1): "matchEnd" is no longer where bots
+  // stay after a match; results are read from `results` instead.
+  function cli(args: string[]): Promise<{ code: number | null; stdout: string; ms: number }> {
+    const started = Date.now();
+    return new Promise((resolve) => {
+      const child = spawn('npx', ['tsx', 'scripts/bot.ts', ...args], { cwd: process.cwd() });
       let stdout = '';
       child.stdout.on('data', (d) => (stdout += String(d)));
       child.stderr.on('data', (d) => (stdout += String(d)));
-      child.on('close', (code) => resolve({ code, stdout }));
+      child.on('close', (code) => resolve({ code, stdout, ms: Date.now() - started }));
     });
+  }
+
+  it('the bot CLI creates a room, fills it and reports the winner', async () => {
+    const out = await cli(['--server', url, '--create', '--count', '2', '--map', 'open', '--target-score', '1', '--once']);
     expect(out.stdout).toMatch(/room [A-Z0-9]{5}/);
     expect(out.stdout).toMatch(/winner: /);
     expect(out.code).toBe(0);
   }, 45_000);
+
+  it('the bot CLI also finishes on the default map (walls and all)', async () => {
+    const out = await cli(['--server', url, '--create', '--count', '2', '--target-score', '1', '--once', '--timeout', '40']);
+    expect(out.stdout).toMatch(/winner: /);
+    expect(out.code).toBe(0);
+  }, 60_000);
+
+  it('the bot CLI fails fast, with the reason, when the server is unreachable', async () => {
+    const out = await cli(['--server', 'ws://127.0.0.1:1', '--create', '--once', '--timeout', '30']);
+    expect(out.code).toBe(1);
+    expect(out.stdout).toMatch(/reach/);
+    expect(out.ms).toBeLessThan(15_000); // not the 30 s timeout
+  }, 30_000);
+
+  it('the bot CLI refuses invalid options before connecting', async () => {
+    for (const args of [
+      ['--target-score', '0'],
+      ['--round-time', '5'],
+      ['--map', 'nope'],
+      ['--strategy', 'dance'],
+      ['--count', '2.5'],
+    ]) {
+      const out = await cli(['--server', 'ws://127.0.0.1:1', '--create', ...args]);
+      expect(out.code, args.join(' ')).toBe(1);
+      expect(out.stdout, args.join(' ')).not.toMatch(/reach/); // refused before any connection attempt
+    }
+  }, 60_000);
 });
